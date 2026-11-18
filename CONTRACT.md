@@ -72,6 +72,18 @@ type Scope =
   | { mode: 'all' }
 ```
 
+### 输出契约（grep 形状）
+
+默认文本输出为 `renderHits()` 的 **grep 形状**：`<session>:<seq>:<text>`，一行一条。
+
+硬规则：
+- stdout **只有结果行**，不含 scope 首行、不含「还有 N 条」提示、不含装饰；
+  `| head` / `| wc -l` / `| cut -d: -f1` 必须能直接用。
+- 工具自己的话术（命中总数、模糊放宽、去重折叠）由 `hitNotes()` 返回，
+  CLI 写 **stderr**。这与 grep 把警告写 stderr 一致。
+- 富格式（kind/surface/标题/截断后缀）只在 `verbose: true` 时出现。
+- 输出必须以换行结尾（否则 `| wc -l` 少数一行）。
+
 ### surface 语义（`--recall` 的全部依据）
 
 | surface | 含义 | 对 agent 的价值 |

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 
 import {
   clip,
+  hitNotes,
   renderHits,
   renderShow,
   renderOutline,
@@ -114,24 +115,49 @@ test('renderHits：json 可 JSON.parse 还原', () => {
   assert.deepEqual(JSON.parse(out), HITS_RESULT);
 });
 
-test('renderHits：首行含作用域与总数，一行一命中', () => {
+test('renderHits：默认是 grep 形状 session:seq:text，逐行一条命中', () => {
   const out = renderHits(HITS_RESULT, { scope: SCOPE });
   const lines = out.split('\n');
-  assert.equal(lines.length, 3); // 首行 + 2 条命中
+  // 没有 scope 首行 —— grep 不会先说"我在哪些文件里找"
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0], 'aaaaaaaa:3:需要 [幂等键] 去重');
+  // 标题/片段里的换行必须被压平，否则「一行一命中」就不成立
+  assert.equal(lines[1], 'bbbbbbbb:8:line1 line2 [结算]');
+});
+
+test('renderHits：grep 形状可直接管道组合', () => {
+  const out = renderHits(HITS_RESULT, { scope: SCOPE });
+  // 这是核心承诺：cut -d: -f1 能拿到会话名，不会被元信息行打乱
+  const sessions = out.split('\n').map((line) => line.split(':')[0]);
+  assert.deepEqual(sessions, ['aaaaaaaa', 'bbbbbbbb']);
+  assert.ok(!out.includes('scope:'));
+  assert.ok(!out.includes('total'));
+});
+
+test('renderHits：空结果只说 no hits，不加装饰', () => {
+  const out = renderHits({ total: 0, hits: [] }, { scope: { mode: 'all' } });
+  assert.equal(out, '(no hits)');
+});
+
+test('renderHits：verbose 才给富格式（scope 首行 + kind/surface）', () => {
+  const out = renderHits(HITS_RESULT, { scope: SCOPE, verbose: true });
+  const lines = out.split('\n');
+  assert.equal(lines.length, 3);
   assert.ok(lines[0].includes('project /tmp/x'));
   assert.ok(lines[0].includes('total 2'));
   assert.equal(lines[1], '[user/current] aaaaaaaa #3 幂等键排查 :: 需要 [幂等键] 去重');
-  // 标题/片段里的换行必须被压平，保持「一行一命中」
-  assert.equal(lines[2], '[assistant/shadowed] bbbbbbbb #8 退款 对账 :: line1 line2 [结算]');
 });
 
-test('renderHits：空结果也有首行', () => {
-  const out = renderHits({ total: 0, hits: [] }, { scope: { mode: 'all' } });
-  assert.ok(out.split('\n')[0].includes('all sessions'));
-  assert.ok(out.includes('(no hits)'));
+test('hitNotes：把总数/折叠/放宽单独汇报（走 stderr，不污染管道）', () => {
+  assert.deepEqual(hitNotes({ total: 90, hits: [1, 2, 3] }), ['90 total, 3 shown']);
+  assert.deepEqual(hitNotes({ total: 2, hits: [1, 2] }), []);
+  assert.deepEqual(
+    hitNotes({ total: 40, hits: [1, 2], collapsed: 3, fuzzy: { what: 'spelling', applied: 'x→y' } }),
+    ['40 total, 2 shown', '3 near-duplicate hidden', 'spelling→x→y'],
+  );
 });
 
-test('renderHits：maxChars 真的不超预算并追加 … (+N more)', () => {
+test('renderHits：maxChars 真的不超预算，且 grep 形状不把截断提示写进 stdout', () => {
   const hits = Array.from({ length: 40 }, (_, i) => ({
     sessionId: 'aaaaaaaa-1111-4111-8111-111111111111',
     short: 'aaaaaaaa',
@@ -146,11 +172,15 @@ test('renderHits：maxChars 真的不超预算并追加 … (+N more)', () => {
   }));
   const out = renderHits({ total: hits.length, hits }, { scope: SCOPE, maxChars: 300 });
   assert.ok(out.length <= 300, `超预算: ${out.length}`);
-  const lines = out.split('\n');
-  const m = lines.at(-1).match(/^… \(\+(\d+) more\)$/u);
-  assert.ok(m, `缺少截断后缀: ${lines.at(-1)}`);
-  const included = lines.length - 2; // 去掉首行与后缀行
-  assert.equal(Number(m[1]), hits.length - included);
+  // grep 形状下不写「还有 N 条」：那行会被 `cut -d: -f1` 当成会话名。
+  // 这个事实改由 hitNotes 汇报（stderr）。
+  assert.doesNotMatch(out, /more\)/u);
+  assert.ok(out.split('\n').length < hits.length);
+
+  // verbose 仍然保留人性化的截断后缀
+  const rich = renderHits({ total: hits.length, hits }, { scope: SCOPE, maxChars: 300, verbose: true });
+  assert.ok(rich.length <= 300);
+  assert.match(rich.split('\n').at(-1), /^… \(\+\d+ more\)$/u);
 });
 
 test('renderHits：极小预算退化为省略号但绝不超过', () => {
@@ -160,7 +190,9 @@ test('renderHits：极小预算退化为省略号但绝不超过', () => {
 
 test('renderHits：maxChars=0 不截断', () => {
   const out = renderHits(HITS_RESULT, { scope: SCOPE, maxChars: 0 });
-  assert.ok(out.includes('#8'));
+  assert.ok(out.includes('bbbbbbbb:8:'));
+  const rich = renderHits(HITS_RESULT, { scope: SCOPE, maxChars: 0, verbose: true });
+  assert.ok(rich.includes('#8'));
 });
 
 test('renderHits：maxChars=0 与 json 同时给出时 json 优先', () => {
@@ -182,9 +214,19 @@ test('renderShow：maxChars 生效', () => {
   assert.ok(out.includes('more)'));
 });
 
+test('renderOutline：默认无 scope 首行，verbose 才给', () => {
+  const plain = renderOutline(OUTLINE_RESULT, { scope: SCOPE });
+  assert.ok(!plain.split('\n')[0].startsWith('scope:'));
+  const rich = renderOutline(OUTLINE_RESULT, { scope: SCOPE, verbose: true });
+  assert.ok(rich.split('\n')[0].startsWith('scope:'));
+});
+
 test('renderOutline：回合与检查点都渲染，json 可还原', () => {
   const out = renderOutline(OUTLINE_RESULT);
-  assert.ok(out.split('\n')[0].includes('1 sessions'));
+  // 默认无 scope 首行 → 第一条就是会话行
+  assert.ok(out.split('\n')[0].startsWith('▸ aaaaaaaa 幂等键排查'));
+  const rich = renderOutline(OUTLINE_RESULT, { verbose: true });
+  assert.ok(rich.split('\n')[0].includes('1 sessions'));
   assert.ok(out.includes('▸ aaaaaaaa 幂等键排查'));
   assert.ok(out.includes('T1 #10 > 排查重复扣款'));
   assert.ok(out.includes('< 已定位到唯一索引'));

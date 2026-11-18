@@ -1,15 +1,28 @@
 # conversation_finder · `cfind`
 
-> 在 **agent 会话历史**里"像记忆一样"找回内容 —— 即使已经被压缩掉。
-> 分层「摘要 → 选择 → 全文」，零第三方依赖，CLI + MCP 双形态，面向 agent 与人共用。
+> **会话历史的 grep。** 一个 pattern 进去，命中行出来 —— 包括已经被压缩掉、模型看不见的那部分。
+> 零第三方依赖，CLI + MCP 双形态，面向 agent 与人共用。
 
 ```bash
-cfind 幂等键                 # 不用传会话 id：默认搜"自己"
-cfind 幂等键 --all --json    # 全库 + 机器可读
-cfind show 178bf480 2417     # 取某条事件原文窗口
-cfind outline --all          # L1 摘要：标题 + 每回合一行 + 压缩检查点
-cfind audit                  # 隐私/涉密扫描（输出强制脱敏）
+cfind 幂等键                      # 默认搜"自己"，不用传会话 id
+cfind 幂等键 --all                # 搜全部会话（≈ grep -r）
+cfind 幂等键 --all | cut -d: -f1  # 哪些会话提到它（grep 式管道）
+cfind show 178bf480 2417          # 取某条命中的上下文（≈ -A/-B）
 ```
+
+输出就是 `session:seq:text`，一行一条，和 `file:line:content` 同构：
+
+```
+$ cfind settlement_id --all --limit 3
+e8cef3de:2122:⏵ fts5vocab 可用（注意：`settlement_id` 被切成 …
+9feefbdc:79:…assert.deepEqual(suggestTerms(['set'], 'settlement_id'…
+e8cef3de:3065:…cfind settlement_id --all --limit 3 2>&1…
+```
+
+**stdout 只放结果**；命中总数、模糊放宽、去重折叠这些"工具自己的话术"走 stderr
+（grep 把警告写 stderr，同理），所以 `| head`、`| wc -l`、`| cut -d: -f1` 都不会被打乱。
+
+想要带 kind/surface/标题的富格式就 `--verbose`。
 
 两种形态，同一套内核：
 
@@ -29,8 +42,8 @@ agent 的 `/compact`（或自动压缩）只让模型**看不见**旧消息，**
 | `shadowed`（已压缩，模型不可见） | **1539** | **62%** |
 
 ```bash
-$ cfind 自举 --all --surface shadowed
-[user/shadowed] 178bf480 #8 检查DSH更新及插件自举 :: 来检查这一整套DSH的更新…一别读凭证 二别着急操作
+$ cfind 自举 --all --recall
+178bf480:8:来检查这一整套DSH的更新…一别读凭证 二别着急操作
 ```
 
 压缩之后再问"我们最初要干什么"，模型答不出来，`cfind` 一秒取回。

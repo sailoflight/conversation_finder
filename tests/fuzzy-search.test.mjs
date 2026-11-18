@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../lib/schema.mjs';
 import { search } from '../lib/query.mjs';
 import { bigrams } from '../lib/cjk.mjs';
-import { renderHits, renderOutline } from '../lib/format.mjs';
+import { hitNotes, renderHits, renderOutline } from '../lib/format.mjs';
 
 const SESSION = 'sess-fuzzy-0001';
 
@@ -82,36 +82,38 @@ test('近似重复命中被折叠，且 collapsed 如实上报', () => {
   assert.ok(folded.hits.length < raw.hits.length);
 });
 
-test('terse 输出省掉排版，但不丢可定位信息', () => {
+test('默认输出就是 grep 形状，逐行可定位', () => {
   const db = makeDb([
     'settlement_id 是幂等键的第一步',
     'settlement_id 还出现在对账脚本里',
   ]);
   const result = search(db, { query: 'settlement_id', scope, limit: 5 });
-  const normal = renderHits(result, { scope: 'all sessions', maxChars: 0 });
-  const terse = renderHits(result, { scope: 'all sessions', maxChars: 0, terse: true });
-
-  assert.ok(terse.length < normal.length, 'terse 应当更短');
-  assert.doesNotMatch(terse, /^scope:/m, 'terse 不应有 scope 首行');
-  // 每个命中仍然带着「哪个会话 + 第几条」，否则 agent 没法接着调 show
+  const out = renderHits(result, { scope: 'all sessions', maxChars: 0 });
+  // 每个命中都带着「哪个会话 + 第几条」，agent 能直接接着调 show
   for (const hit of result.hits) {
-    assert.ok(terse.includes(`${hit.short}#${hit.seq}`), `缺少定位信息 ${hit.short}#${hit.seq}`);
+    assert.ok(out.includes(`${hit.short}:${hit.seq}:`), `缺少定位信息 ${hit.short}:${hit.seq}`);
   }
+  // 没有装饰性首行，管道直接用
+  assert.ok(!out.includes('scope:'));
+  assert.equal(out.split('\n').length, result.hits.length);
 });
 
-test('terse 会把「结果被放宽过」说出来', () => {
+test('「结果被放宽过」通过 hitNotes 汇报，而不是塞进结果行', () => {
   const db = makeDb(['we must reconcile the ledger carefully']);
   const result = search(db, { query: 'reconclie', scope, limit: 5 });
-  const terse = renderHits(result, { scope: 'all sessions', maxChars: 0, terse: true });
-  assert.match(terse, /spelling→/, '放宽事实必须可见，否则用户会以为这就是精确结果');
+  // 结果行保持纯净（grep 形状）
+  const out = renderHits(result, { scope: 'all sessions', maxChars: 0 });
+  assert.doesNotMatch(out, /spelling/);
+  // 但放宽这件事必须让调用方知道 —— 否则会以为这就是精确结果
+  assert.match(hitNotes(result, { shown: 1 }).join(' '), /spelling→/);
 });
 
-test('outline 的 terse 省略 scope 首行', () => {
+test('outline 默认省略 scope 首行（与 renderHits 同一原则）', () => {
   const result = { sessions: [] };
-  const normal = renderOutline(result, { scope: 'all sessions', maxChars: 0 });
-  const terse = renderOutline(result, { scope: 'all sessions', maxChars: 0, terse: true });
-  assert.match(normal, /^scope:/);
-  assert.doesNotMatch(terse, /^scope:/);
+  const plain = renderOutline(result, { scope: 'all sessions', maxChars: 0 });
+  const rich = renderOutline(result, { scope: 'all sessions', maxChars: 0, verbose: true });
+  assert.doesNotMatch(plain, /^scope:/);
+  assert.match(rich, /^scope:/);
 });
 
 test('中文尾字写错仍能召回（CJK 容错级）', () => {

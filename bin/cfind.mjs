@@ -14,19 +14,22 @@ import { syncIndex, stats } from '../lib/store.mjs';
 import { search, show, resolveSessionIds } from '../lib/query.mjs';
 import { outline } from '../lib/outline.mjs';
 import { audit, DEFAULT_PATTERNS } from '../lib/audit.mjs';
-import { renderHits, renderShow, renderOutline, renderAudit, renderStats } from '../lib/format.mjs';
+import { renderHits, renderShow, renderOutline, renderAudit, renderStats, hitNotes } from '../lib/format.mjs';
 
 const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude Code / Codex / OpenCode）
+用法（grep 形状：输出 <session>:<seq>:<text>，一行一条，可直接管道）:
+  cfind <pattern>                    搜当前会话（agent 默认搜自己，无需传参）
+  cfind <pattern> --all              搜全部会话（相当于 grep -r）
+  cfind <pattern> | cut -d: -f1      哪些会话提到了它
+  cfind show <session> <seq>         取某条命中的原文上下文（相当于 -A/-B）
+  cfind outline                      会话目录（相当于 grep -l：有哪些会话、聊了什么）
+  cfind audit                        隐私/涉密扫描（输出强制脱敏）
+  cfind index / stats                索引维护 / 统计
 
-用法:
-  cfind <query> [选项]              搜内容（默认搜当前会话）
-                                    拼错/只记词头也能搜到（自动纠错，会标注）
-  cfind show <session> <seq>        取某条事件的原文窗口
-  cfind outline                     会话摘要：标题 + 每回合一行 + 压缩检查点
-                                    （知道要搜什么就直接搜，outline 贵约 5 倍）
-  cfind audit                       隐私/涉密扫描（输出脱敏）
-  cfind index                       只更新索引
-  cfind stats                       索引统计
+示例:
+  cfind 幂等键                         在当前会话里找
+  cfind settlement_id --all --limit 20
+  cfind 幂等键 --all | sort | uniq -c    统计哪个会话提得最多（-f1 先 cut）
 
 作用域（优先级从上到下，全部自动）:
   --session <id>    指定会话
@@ -35,30 +38,32 @@ const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude 
   --all             全部会话
 
 选项:
-  --json              机器可读输出（稳定字段）
+  --limit <n>         最多几条命中（默认 10）
   --max-chars <n>     输出字符预算（默认 1500）
-  --limit <n>         命中条数（默认 10）
-  --no-reasoning      排除 reasoning 文档（默认包含，权重最低）
+  --json              机器可读输出（完整字段，含 title/kind/surface/score）
+  --verbose           富格式：加 scope 首行、kind/surface、会话标题（人读更舒服）
   --surface <s>       all | current | shadowed（默认 all）
-  --source <list>     只扫这些来源，逗号分隔（dsh,claude,codex,opencode；默认全部已检测到的）
-  --before <n>        show: 目标前 n 条（默认 3）
-  --after <n>         show: 目标后 n 条（默认 3）
-  --full              show: 不截断
-  --terse             精简输出（省排版：无 scope 首行、短前缀、标题不重复）。给 agent 用
+  --recall            等价 --surface shadowed：只搜「已被压缩掉、你看不见」的部分
+  --exclude-self      排除当前正在写入的会话（即你自己）
+  --source <list>     只扫这些来源，逗号分隔（dsh,claude,codex,opencode）
+  --no-reasoning      排除 reasoning 文档（默认包含，权重最低）
+  --no-fuzzy          关闭模糊级联（前缀/纠错/CJK 容错/放宽），只做精确匹配
   --no-dedupe         关闭近似重复折叠（默认开启）
-  --no-fuzzy          关闭模糊级联（前缀/纠错/放宽），只做精确匹配
-  --exclude-self      排除「当前正在写入的会话」（即你自己）。找别的会话的知识时用
-  --recall            召回被压缩掉的记忆：等价于 --surface shadowed
-                      （压缩后的内容你本来就看得见；看不见的才是需要召回的）
-  --min-severity <s>  audit: high|medium|low|all（默认 high；低精度熵启发式需显式 all）
-  --fail-on-findings  audit: 有命中则退出码 1（适合做 CI 门禁）
+  --before/--after <n>  show: 目标前后各取几条（默认 3）
+  --full              show: 不截断
+  --min-severity <s>  audit: high|medium|low|all（默认 high；熵启发式误报高，需显式 all）
+  --fail-on-findings  audit: 有命中则退出码 1（CI 门禁）
   --no-index          不读写磁盘索引，用内存索引现建现查
+  --terse             已无作用（默认就是精简格式），保留仅为兼容旧脚本
   -h, --help          显示帮助
+
+stdout 只放结果；命中总数、模糊放宽、去重折叠这些"工具自己的话术"走 stderr，
+所以 \`| head\`、\`| wc -l\`、\`| cut -d: -f1\` 都不会被它们打乱。
 
 退出码: 0 命中 / 1 无命中 / 2 用法错误 / 3 语料不可读
 `;
 
-const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall']);
+const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'verbose', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall']);
 const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'before', 'after', 'pattern', 'min-severity', 'source']);
 
 /** 解析 argv → { positional, flags }。未知选项直接报错，避免静默忽略。 */
@@ -227,7 +232,7 @@ export function main(argv = process.argv.slice(2)) {
     if (isCommand && command === 'outline') {
       const result = outline(db, { scope: scopeFinal });
       process.stdout.write(
-        renderOutline(result, { json, maxChars: num(flags['max-chars'], 3000), scope: describeScope(scopeFinal), terse }),
+        renderOutline(result, { json, maxChars: num(flags['max-chars'], 3000), scope: describeScope(scopeFinal), verbose: flags.verbose === true }),
       );
       return 0;
     }
@@ -260,9 +265,21 @@ export function main(argv = process.argv.slice(2)) {
       surface: surface ?? 'all',
     });
     const count = result.total;
-    process.stdout.write(
-      renderHits({ ...result, query }, { json, maxChars, scope: describeScope(scopeFinal), terse }),
-    );
+    const rendered = renderHits({ ...result, query }, {
+      json,
+      maxChars,
+      scope: describeScope(scopeFinal),
+      verbose: flags.verbose === true,
+      terse,
+    });
+    // grep 的规矩：stdout 只放结果（且以换行结尾，这样 `| wc -l` 数得对），
+    // 工具自己的话术走 stderr —— `| head -5` 才不会拿到一条提示行。
+    process.stdout.write(rendered.endsWith('\n') ? rendered : `${rendered}\n`);
+    if (!json) {
+      const shown = rendered === '(no hits)' ? 0 : rendered.split('\n').filter(Boolean).length;
+      const notes = hitNotes(result, { shown });
+      if (notes.length > 0) process.stderr.write(`(${notes.join(' · ')})\n`);
+    }
     return count > 0 ? 0 : 1;
   } finally {
     db.close?.();
