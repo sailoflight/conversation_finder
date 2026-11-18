@@ -24,7 +24,7 @@
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { openDb } from '../lib/schema.mjs';
-import { indexPath, sessionsRoot, listSessionFiles, resolveScope, describeScope } from '../lib/paths.mjs';
+import { indexPath, describeScope, selfSessionId } from '../lib/paths.mjs';
 import { syncIndex } from '../lib/store.mjs';
 import { search, show } from '../lib/query.mjs';
 import { outline } from '../lib/outline.mjs';
@@ -65,36 +65,35 @@ function sync(only) {
   }
 }
 
-// ── 作用域：显式参数 > mtime 启发式 ───────────────────────────────────────
-/**
- * 找出「最近仍在写入」的会话：mtime 最新的会话文件。
- * 调用方正在被追加日志，所以它几乎必然是 mtime 最新者。
- */
-function selfSessionId(root = sessionsRoot()) {
-  const files = listSessionFiles(root).sort((left, right) => right.mtime - left.mtime);
-  for (const file of files) {
-    try {
-      const { header } = readSessionFile(file.path);
-      if (header?.id) return String(header.id);
-    } catch {
-      /* 损坏或半截的会话：看下一个 */
-    }
-  }
-  return undefined;
-}
+// ── 作用域：显式参数 > 自己 ───────────────────────────────────────────────
+//
+// 「自己是谁」统一由 lib/paths.mjs 的 selfSessionId() 回答（先看 $DSH_SESSION_ID，
+// 再退回 files 表 mtime 最新）。不在这里另写一份 —— 两处实现迟早会不一致。
+// 注意：MCP 下 DSH 会 scrub 掉所有非 DSH_ 前缀的环境变量，所以实际走的是 mtime 推断。
 
 /** 把工具参数解析成 Scope；都不给就是「搜自己」。 */
-function scopeOf(args) {
-  if (args.all === true) return { mode: 'all' };
-  if (typeof args.session === 'string' && args.session.trim()) {
-    return { mode: 'session', id: args.session.trim() };
+function scopeOf(args, target) {
+  const self = selfSessionId(target);
+  const base = (() => {
+    if (args.all === true) return { mode: 'all' };
+    if (typeof args.session === 'string' && args.session.trim()) {
+      return { mode: 'session', id: args.session.trim() };
+    }
+    if (typeof args.project === 'string' && args.project.trim()) {
+      return { mode: 'project', cwd: args.project.trim() };
+    }
+    if (self) return { mode: 'session', id: self };
+    return { mode: 'project', cwd: process.cwd() };
+  })();
+
+  const scoped = { ...base };
+  if (typeof args.source === 'string' && args.source.trim()) {
+    scoped.sources = args.source.split(',').map((id) => id.trim()).filter(Boolean);
   }
-  if (typeof args.project === 'string' && args.project.trim()) {
-    return { mode: 'project', cwd: args.project.trim() };
-  }
-  const self = selfSessionId();
-  if (self) return { mode: 'session', id: self };
-  return { mode: 'project', cwd: process.cwd() };
+  // 排除自己只在「范围不是我自己」时有意义；显式 --session 时也允许排，
+  // 但要注意排空了就是 0 命中 —— 那是诚实的结果，不该偷偷换范围。
+  if (args.excludeSelf === true && self !== undefined) scoped.exclude = [self];
+  return scoped;
 }
 
 /** 短 id 前缀 → 完整会话 id。真实 id 可能带 `session-` 前缀，展示与匹配都要剥。 */
@@ -116,6 +115,12 @@ const SCOPE_PROPS = {
   session: { type: 'string', description: '限定单个会话 id（支持短前缀）。省略时默认「最近活跃的会话」，即调用方自己。' },
   project: { type: 'string', description: '限定某个 cwd 的项目下所有会话。' },
   all: { type: 'boolean', description: '搜全部会话（跨项目）。' },
+  excludeSelf: {
+    type: 'boolean',
+    description:
+      '排除调用方自己那个会话。用 --all 找「别的会话里的知识」时建议开启：' +
+      '否则你会搜到自己刚才敲的每条命令（本工具索引的正是会话历史，包含工具调用）。',
+  },
 };
 
 const TOOLS = [
@@ -219,7 +224,7 @@ function callTool(name, args) {
     case 'search': {
       const query = String(args.query ?? '').trim();
       if (!query) throw new Error('query 不能为空');
-      const scope = scopeOf(args);
+      const scope = scopeOf(args, target);
       const result = search(target, {
         query,
         scope,
@@ -253,7 +258,7 @@ function callTool(name, args) {
       return text(renderShow(shown, { json: false, maxChars: 4000 }));
     }
     case 'outline': {
-      const scope = scopeOf(args);
+      const scope = scopeOf(args, target);
       const result = outline(target, { scope });
       return text(
         renderOutline(result, {
@@ -265,7 +270,7 @@ function callTool(name, args) {
       );
     }
     case 'audit': {
-      const scope = scopeOf(args);
+      const scope = scopeOf(args, target);
       const result = audit(target, {
         patterns: DEFAULT_PATTERNS,
         scope,

@@ -113,6 +113,21 @@ e8cef3de#2122 assistant … :: …[reconcile] the ledger…
 成本：纠错热路径 **0.7–3.6 ms**；首次调用建词表缓存约 140 ms（常驻进程只付一次）。
 `--no-fuzzy` 可关闭。
 
+## 排除自己：`--exclude-self`
+
+cfind 索引的是**会话历史**，而 agent 的每条工具调用都在历史里 —— 所以你刚敲的命令
+下一刻就成了可检索内容。找「别的会话里的知识」时这层噪音很大：
+
+```bash
+cfind 挂载 --all --exclude-self      # 只看别人/别的会话，不看自己
+cfind audit --all --exclude-self     # 审计时排除自己（最常见用法）
+```
+
+「自己」的判定顺序：`$DSH_SESSION_ID` → `files` 表里 mtime 最新的会话
+（后者对四个源都成立：调用方正在被追加日志，所以它几乎必然是最近被改的那个）。
+
+MCP 有同名参数 `excludeSelf`。
+
 ## 精简输出：给 agent 省 token
 
 `--terse` 砍掉的是**排版**不是信息：无 `scope` 首行、前缀压成 `short#seq kind`、

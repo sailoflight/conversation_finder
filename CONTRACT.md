@@ -153,6 +153,12 @@ show(db, { sessionId, seq, before = 3, after = 3 }): {
   events: Array<{ seq, type, time, surface, role, text, isTarget }>
 }
 ```
+Scope 额外支持两个**可选收窄**字段（不改变 mode 语义，只在已框定的范围上做减法）：
+- `sources?: string[]` —— 只保留这些来源（`docs.source IN`）。
+- `exclude?: string[]` —— 排除这些会话（`docs.session_id NOT IN`）。
+`search` / `outline` / `audit` **三者都必须实现**：audit 有自己的一套 scopeWhere，
+早先漏掉这两个条件，导致 `audit --exclude-self` 静默失效。
+
 规则：
 - 查询串用 `buildMatchQuery`；返回 `{like}` 时走 `docs.body LIKE ?`（单字 CJK 兜底）。
 - **模糊级联**（仅在精确匹配 `total === 0` 时启动，逐级放宽、命中即停）：

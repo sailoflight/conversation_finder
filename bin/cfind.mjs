@@ -9,7 +9,7 @@
 //   · 退出码与 grep 对齐：0 有命中 / 1 无命中 / 2 用法或索引错误 / 3 语料不可读。
 import { existsSync } from 'node:fs';
 import { openDb } from '../lib/schema.mjs';
-import { indexPath, sessionsRoot, listSessionFiles, resolveScope, describeScope, shortId } from '../lib/paths.mjs';
+import { indexPath, sessionsRoot, listSessionFiles, resolveScope, describeScope, shortId, selfSessionId } from '../lib/paths.mjs';
 import { syncIndex, stats } from '../lib/store.mjs';
 import { search, show, resolveSessionIds } from '../lib/query.mjs';
 import { outline } from '../lib/outline.mjs';
@@ -47,6 +47,7 @@ const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude 
   --terse             精简输出（省排版：无 scope 首行、短前缀、标题不重复）。给 agent 用
   --no-dedupe         关闭近似重复折叠（默认开启）
   --no-fuzzy          关闭模糊级联（前缀/纠错/放宽），只做精确匹配
+  --exclude-self      排除「当前正在写入的会话」（即你自己）。找别的会话的知识时用
   --min-severity <s>  audit: high|medium|low|all（默认 high；低精度熵启发式需显式 all）
   --fail-on-findings  audit: 有命中则退出码 1（适合做 CI 门禁）
   --no-index          不读写磁盘索引，用内存索引现建现查
@@ -55,7 +56,7 @@ const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude 
 退出码: 0 命中 / 1 无命中 / 2 用法错误 / 3 语料不可读
 `;
 
-const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'no-dedupe', 'no-fuzzy']);
+const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'no-dedupe', 'no-fuzzy', 'exclude-self']);
 const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'before', 'after', 'pattern', 'min-severity', 'source']);
 
 /** 解析 argv → { positional, flags }。未知选项直接报错，避免静默忽略。 */
@@ -160,7 +161,6 @@ export function main(argv = process.argv.slice(2)) {
   // --source 有两个作用：收窄索引扫描，以及收窄检索范围。两者都要，否则
   // 「--source claude」会退回全库统计（曾经踩过）。
   const only = typeof flags.source === 'string' ? flags.source.split(',').map((id) => id.trim()).filter(Boolean) : undefined;
-  const scopeWithSources = only === undefined ? scope : { ...scope, sources: only };
 
   const { db, mode } = openIndex({ noIndex: flags['no-index'] });
   try {
@@ -169,6 +169,18 @@ export function main(argv = process.argv.slice(2)) {
     const json = flags.json === true;
     const maxChars = num(flags['max-chars'], 1500);
     const terse = flags.terse === true;
+
+    // 作用域收窄必须在 sync 之后算：selfSessionId 依赖 files 表里刚刷新的 mtime。
+    // 早算会用到上一轮的 mtime，排除的可能是「上一次」正在写的会话（曾经写反过顺序）。
+    const excludeSelf = flags['exclude-self'] === true ? selfSessionId(db) : undefined;
+    const scopeFinal =
+      only === undefined && excludeSelf === undefined
+        ? scope
+        : {
+            ...scope,
+            ...(only === undefined ? {} : { sources: only }),
+            ...(excludeSelf === undefined ? {} : { exclude: [excludeSelf] }),
+          };
 
     if (isCommand && command === 'help') {
       process.stdout.write(HELP);
@@ -197,20 +209,20 @@ export function main(argv = process.argv.slice(2)) {
         : DEFAULT_PATTERNS;
       const result = audit(db, {
         patterns,
-        scope: scopeWithSources,
+        scope: scopeFinal,
         limit: num(flags.limit, 50),
         includeReasoning: flags['no-reasoning'] !== true,
         minSeverity: flags['min-severity'] ?? 'high',
       });
-      process.stdout.write(renderAudit(result, { json, scope: describeScope(scope) }));
+      process.stdout.write(renderAudit(result, { json, scope: describeScope(scopeFinal) }));
       if (flags['fail-on-findings'] === true && result.findings.length > 0) return 1;
       return 0;
     }
 
     if (isCommand && command === 'outline') {
-      const result = outline(db, { scope: scopeWithSources });
+      const result = outline(db, { scope: scopeFinal });
       process.stdout.write(
-        renderOutline(result, { json, maxChars: num(flags['max-chars'], 3000), scope: describeScope(scope), terse }),
+        renderOutline(result, { json, maxChars: num(flags['max-chars'], 3000), scope: describeScope(scopeFinal), terse }),
       );
       return 0;
     }
@@ -235,7 +247,7 @@ export function main(argv = process.argv.slice(2)) {
     if (!query) throw new UsageError('用法: cfind <query> [选项]');
     const result = search(db, {
       query,
-      scope: scopeWithSources,
+      scope: scopeFinal,
       dedupe: flags['no-dedupe'] !== true,
       fuzzy: flags['no-fuzzy'] !== true,
       limit: num(flags.limit, 10),
@@ -244,7 +256,7 @@ export function main(argv = process.argv.slice(2)) {
     });
     const count = result.total;
     process.stdout.write(
-      renderHits({ ...result, query }, { json, maxChars, scope: describeScope(scope), terse }),
+      renderHits({ ...result, query }, { json, maxChars, scope: describeScope(scopeFinal), terse }),
     );
     return count > 0 ? 0 : 1;
   } finally {
