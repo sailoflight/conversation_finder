@@ -42,6 +42,19 @@ $ cfind show 1b4094ad 186 --before 1 --after 1
 | **CLI** | `cfind` / `./cfind` | 人在终端、脚本、沙箱里（`--no-index` 内存模式） |
 | **MCP** | `bin/cfind-mcp.mjs` + `mcp/` bundle | agent 用**原生工具**（`mcp__cfind__search`），常驻进程、无 Node 启动开销 |
 
+## 刻意不像 grep 的三处
+
+对着 grep 抄的时候，这三处我故意没抄 —— 因为抄了会更难用：
+
+| grep 的行为 | cfind | 为什么 |
+|---|---|---|
+| **大小写敏感** | 不敏感 | 你记不住 `settlement_id` 还是 `SettlementId`；记错了 grep 直接 0 命中 |
+| **按文件顺序输出** | 按相关度（bm25 × 来源权重） | 你要的是"哪条最可能是答案"，不是"哪条先出现" |
+| **只搜磁盘上现存的文本** | 包括**已被压缩掉**的历史 | 这正是它存在的理由；grep 没有这个概念 |
+
+其余都照抄：一个 pattern、一行一条、`session:seq:text`、管道友好、`0/1` 退出码、
+`:`/`-` 区分命中与上下文、警告走 stderr。
+
 ## 为什么需要它
 
 agent 的 `/compact`（或自动压缩）只让模型**看不见**旧消息，**原文仍留在磁盘上**。
