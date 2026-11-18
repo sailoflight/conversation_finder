@@ -19,6 +19,7 @@ node bin/cfind.mjs index
 | `latency.mjs` | MCP 常驻 vs CLI spawn 的延迟分布 |
 | `terse-compare.mjs` | 常规 vs `--terse` 的成本对比（同一命中集合） |
 | `fuzzy-eval.mjs` | 模糊搜索的召回率 / 误报率 / 精确率 |
+| `terse-compare.mjs` | 常规 vs `--terse` 的成本对比（同一命中集合） |
 
 ## token 估算口径
 
@@ -77,7 +78,7 @@ tokens ≈ CJK字数 / 1.5 + ASCII字符数 / 4
 |---|---|
 | 漏字母 / 多字母 / 相邻换位 / 只记词头 | 均 **100%** 从 0 救回 |
 | 误报（运行时生成的随机串） | **0 / 20** |
-| 纠错精确率 | **93%** |
+| 纠错精确率 | **90–93%**（随语料变化） |
 
 成本：纠错热路径 0.7–3.6 ms；首次建词表缓存 ≈140 ms（`fts5vocab` 扫 3.3 万词）。
 
