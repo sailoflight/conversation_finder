@@ -22,6 +22,17 @@ e8cef3de:3065:…cfind settlement_id --all --limit 3 2>&1…
 **stdout 只放结果**；命中总数、模糊放宽、去重折叠这些"工具自己的话术"走 stderr
 （grep 把警告写 stderr，同理），所以 `| head`、`| wc -l`、`| cut -d: -f1` 都不会被打乱。
 
+`show` 沿用 grep 的 context 惯例 —— 命中行用 `:`、上下文行用 `-`：
+
+```
+$ cfind show 1b4094ad 186 --before 1 --after 1
+1b4094ad-185-bash {"command":"f=$(find ~/.dsh/sessions …
+1b4094ad:186:bash {"command":"f=$(find ~/.dsh/sessions …
+1b4094ad-187-[job/registered]
+```
+
+所以 `| grep ':'` 能只留命中行，`| cut -d: -f2` 能只拿行号。
+
 想要带 kind/surface/标题的富格式就 `--verbose`。
 
 两种形态，同一套内核：

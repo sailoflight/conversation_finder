@@ -199,19 +199,31 @@ test('renderHits：maxChars=0 与 json 同时给出时 json 优先', () => {
   assert.deepEqual(JSON.parse(renderHits(HITS_RESULT, { json: true, maxChars: 10 })), HITS_RESULT);
 });
 
-test('renderShow：文本包含目标标记，json 可还原', () => {
+test('renderShow：target 用 : 分隔，上下文用 - 分隔（grep 的 context 惯例）', () => {
   const out = renderShow(SHOW_RESULT, { scope: SCOPE });
-  assert.ok(out.includes('aaaaaaaa 幂等键排查 · /tmp/x'));
+  const lines = out.split('\n');
+  // 命中行：session:seq:text —— cut -d: -f2 只拿到真正的命中
+  assert.ok(lines.some((line) => /^aaaaaaaa:2:/.test(line)), '缺少 : 分隔的命中行');
+  assert.ok(lines.some((line) => /^aaaaaaaa-1-/.test(line)), '缺少 - 分隔的上下文行');
+  assert.ok(out.includes('重复提交会导致重复扣款'));
+  // 默认没有装饰性首行
+  assert.ok(!out.includes('scope:'));
+  assert.deepEqual(JSON.parse(renderShow(SHOW_RESULT, { json: true })), SHOW_RESULT);
+});
+
+test('renderShow：verbose 保留富格式与标题', () => {
+  const out = renderShow(SHOW_RESULT, { scope: SCOPE, verbose: true });
   assert.ok(out.includes('target #2'));
   assert.ok(out.includes('▶ #2 [user/message/current] user :: 重复提交会导致重复扣款'));
   assert.ok(out.includes('  #1 [session/title/current] event :: 标题事件'));
-  assert.deepEqual(JSON.parse(renderShow(SHOW_RESULT, { json: true })), SHOW_RESULT);
 });
 
 test('renderShow：maxChars 生效', () => {
   const out = renderShow(SHOW_RESULT, { maxChars: 60 });
   assert.ok(out.length <= 60, `超预算: ${out.length}`);
-  assert.ok(out.includes('more)'));
+  const rich = renderShow(SHOW_RESULT, { maxChars: 60, verbose: true });
+  assert.ok(rich.length <= 60, `超预算: ${rich.length}`);
+  assert.ok(rich.includes('more)'));
 });
 
 test('renderOutline：默认无 scope 首行，verbose 才给', () => {

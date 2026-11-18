@@ -248,7 +248,7 @@ export function main(argv = process.argv.slice(2)) {
         after: num(flags.after, 3),
       });
       // show 的会话来自位置参数，与 resolveScope 得到的 scope 无关：交给 renderShow 按 sessionId 反推。
-      process.stdout.write(renderShow(shown, { json, maxChars: flags.full ? 0 : maxChars, terse }));
+      process.stdout.write(renderShow(shown, { json, maxChars: flags.full ? 0 : maxChars, verbose: flags.verbose === true }) + '\n');
       return 0;
     }
 
