@@ -107,14 +107,14 @@ test('MCP: server/discover 明确拒绝（触发 client 的 legacy 回落）', a
   }
 });
 
-test('MCP: tools/list 暴露六个工具且 schema 在 DSH 支持的子集内', async () => {
+test('MCP: tools/list 暴露七个工具且 schema 在 DSH 支持的子集内', async () => {
   const home = makeHome();
   const client = connect(home);
   try {
     await client.request('initialize', initParams);
     const response = await client.request('tools/list', {});
     const names = response.result.tools.map((tool) => tool.name).sort();
-    assert.deepEqual(names, ['audit', 'index', 'outline', 'search', 'show', 'stats']);
+    assert.deepEqual(names, ['audit', 'index', 'outline', 'recall', 'search', 'show', 'stats']);
     for (const tool of response.result.tools) {
       assert.equal(tool.inputSchema.type, 'object');
       // DSH 的 assertSupportedJsonSchema 不接受 $schema / format / minimum 等关键字。

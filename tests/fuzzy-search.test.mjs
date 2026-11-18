@@ -113,3 +113,42 @@ test('outline 的 terse 省略 scope 首行', () => {
   assert.match(normal, /^scope:/);
   assert.doesNotMatch(terse, /^scope:/);
 });
+
+test('中文尾字写错仍能召回（CJK 容错级）', () => {
+  // 回归：早先的模糊级联全是拉丁逻辑 —— prefix 对 CJK 返回同构短语、
+  // 拼写纠错只认拉丁、OR 放宽对单条 CJK 也返回短语，等于**对中文完全无效**。
+  const db = makeDb(['最初指令：先预研究一个会话检索项目、还要支持涉密检查']);
+  const typo = search(db, { query: '预研旧', scope, limit: 5 });
+  assert.equal(search(db, { query: '预研旧', scope, limit: 5, fuzzy: false }).total, 0, '精确匹配本来搜不到');
+  assert.ok(typo.total > 0, '尾字写错应被 CJK 容错救回');
+  assert.equal(typo.fuzzy?.what, 'cjk-loose');
+});
+
+test('中文容错不会把长查询放宽（防止噪音）', () => {
+  // 「会话冗余项目」是 5 个 bigram：共享一个 bigram 不构成证据，必须整体命中。
+  // 若这里放宽成 OR，任何含「会话」的文档都会命中 —— 那就等于放弃精确性。
+  const db = makeDb(['关于会话检索项目的讨论', '另一个只提到会话的文档']);
+  const long = search(db, { query: '会话冗余项目', scope, limit: 5 });
+  assert.notEqual(long.fuzzy?.what, 'cjk-loose', '长查询不该走 CJK 容错');
+  assert.equal(long.total, 0, '长查询救不回来时应当诚实返回 0');
+
+  // 同样 5 个 bigram 的精确查询当然要能命中
+  assert.ok(search(db, { query: '会话检索项目', scope, limit: 5 }).total > 0);
+});
+
+test('CJK 容错与 surface=shadowed 组合可用（召回场景）', () => {
+  const db = openDb(':memory:');
+  db.prepare(
+    `INSERT INTO sessions (id, source, cwd, title, created_at, agent_preset, parent_id, event_count, first_time, last_time)
+     VALUES ('sess-cjk-0001', 'dsh', '/tmp', 't', 1700000000000, null, null, 2, 1700000000000, 1700000000000)`,
+  ).run();
+  const insert = db.prepare(
+    'INSERT INTO docs (body, sh, source, session_id, seq, kind, time, surface) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  insert.run('最初指令：先预研究一个项目', bigrams('最初指令：先预研究一个项目'), 'dsh', 'sess-cjk-0001', 1, 'user', 1700000000000, 'shadowed');
+  insert.run('现在的进度是模糊搜索', bigrams('现在的进度是模糊搜索'), 'dsh', 'sess-cjk-0001', 2, 'user', 1700000001000, 'current');
+
+  const recalled = search(db, { query: '预研旧', scope: { mode: 'session', id: 'sess-cjk-0001' }, limit: 5, surface: 'shadowed' });
+  assert.ok(recalled.total > 0);
+  assert.ok(recalled.hits.every((hit) => hit.surface === 'shadowed'));
+});

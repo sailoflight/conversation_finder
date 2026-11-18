@@ -87,6 +87,40 @@ for (let i = 0; i < ROUNDS; i += 1) {
 }
 console.log(`\n误报率 ${falsePositives}/${ROUNDS} = ${((falsePositives / ROUNDS) * 100).toFixed(0)}%（随机串应当 0 命中）`);
 
+// ── 中文容错评测 ────────────────────────────────────────────────────────
+// 之前的评测只覆盖拉丁词，于是漏掉了「模糊搜索对中文完全无效」这个事实。
+// 中文没有拼写，容错只能靠 bigram OR，所以单独测一类：尾字写错。
+const cjkTerms = db
+  .prepare("SELECT DISTINCT term FROM docs_vocab WHERE col = 'sh'")
+  .all()
+  .map((row) => String(row.term))
+  // sh 列里存的是 bigram（两个汉字），只取真正的 2 字词
+  .filter((term) => /^[\u4e00-\u9fff]{2}$/.test(term));
+
+if (cjkTerms.length >= 20) {
+  const cjkSample = cjkTerms.filter((_, index) => index % Math.max(1, Math.floor(cjkTerms.length / 40)) === 0).slice(0, 40);
+  let exact = 0;
+  let fuzzy = 0;
+  let recoverable = 0;
+  let recovered = 0;
+  for (const term of cjkSample) {
+    // 3 字词：正确 bigram 之一 + 一个字面生造的字，模拟「尾字写错」
+    const typo = `${term[0]}${term[1]}鑫`;
+    const before = cnt(typo, false);
+    const after = cnt(typo, true);
+    if (before > 0) exact += 1;
+    if (after > 0) fuzzy += 1;
+    if (before === 0) {
+      recoverable += 1;
+      if (after > 0) recovered += 1;
+    }
+  }
+  console.log(
+    `\n中文尾字写错  样本 ${cjkSample.length}  精确命中 ${exact}  模糊命中 ${fuzzy}  ` +
+      `从0救回 ${recovered}  救回率 ${recoverable === 0 ? '—' : `${((recovered / recoverable) * 100).toFixed(0)}%`}`,
+  );
+}
+
 // 精确率：纠错后返回的文档，是否就是含「正确词」的那批
 const idsOf = (q) => new Set(hits(q, true).hits.map((hit) => `${hit.sessionId}#${hit.seq}`));
 let precisionSum = 0;

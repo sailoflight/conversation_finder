@@ -141,9 +141,18 @@ test('includeReasoning=false 过滤 reasoning', () => {
   assert.equal(all.total, 1);
   assert.equal(all.hits[0].kind, 'reasoning');
 
-  const filtered = search(db, { query: '幂等性', scope: SCOPE_A, includeReasoning: false });
+  // 精确匹配下过滤后应为空 —— 关掉模糊才能只看这个事实：
+  // 否则 CJK 容错会把「幂等」相关但非 reasoning 的文档也放宽进来（那是对的，见下）。
+  const filtered = search(db, { query: '幂等性', scope: SCOPE_A, includeReasoning: false, fuzzy: false });
   assert.equal(filtered.total, 0);
   assert.deepEqual(filtered.hits, []);
+
+  // 开着模糊时：结果允许变多，但**绝不能**出现 reasoning。
+  const loosened = search(db, { query: '幂等性', scope: SCOPE_A, includeReasoning: false });
+  assert.ok(
+    loosened.hits.every((hit) => hit.kind !== 'reasoning'),
+    'includeReasoning=false 必须对每一条命中生效，包括模糊放宽产生的结果',
+  );
 });
 
 test('surface 过滤：current / shadowed 各自可达', () => {

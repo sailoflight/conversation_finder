@@ -72,6 +72,18 @@ type Scope =
   | { mode: 'all' }
 ```
 
+### surface 语义（`--recall` 的全部依据）
+
+| surface | 含义 | 对 agent 的价值 |
+|---|---|---|
+| `current` | 模型仍看得见（最近一次压缩之后） | 低 —— 它本来就在上下文里 |
+| `shadowed` | 已被压缩掉，原文仍在磁盘 | **高 —— 这是唯一「想不起来」的部分** |
+| `all` | 两者之和 | 默认，适合人用 |
+
+`current + shadowed` 必须**恰好覆盖**全部文档（`tests/recall.test.mjs` 锁死这条）。
+`--recall` ≡ `--surface shadowed`；MCP 里是独立的 `recall` 工具，因为它是本项目的
+核心用途，值得一个自解释的名字。
+
 ## 3. 数据库 schema（**这是模块间唯一的耦合面**）
 
 所有读模块直接对这个 schema 写 SQL，**不要** import `lib/store.mjs` 的函数。
@@ -136,7 +148,7 @@ search(db, {
 }): {
   total: number,        // **始终是原始命中数**，不因 dedupe 变小
   collapsed?: number,   // 被折叠掉的条数（0 条时字段不出现）
-  fuzzy?: { what: 'prefix' | 'spelling' | 'loosened', applied: string },
+  fuzzy?: { what: 'prefix' | 'spelling' | 'cjk-loose' | 'loosened', applied: string },
                         // 结果是被放宽后才拿到的，必须如实上报
 
   // 说明：hits 里的 title 现在按 `sessions.source` 走对应适配器；show 亦然。
@@ -165,7 +177,11 @@ Scope 额外支持两个**可选收窄**字段（不改变 mode 语义，只在�
   1. `prefix`：`buildPrefixQuery` → `settle*` 之类，救「只记得词头」；
   2. `spelling`：用 `docs_vocab`（FTS5 词表虚拟视图，零额外存储）做编辑距离纠错，
      按 FTS5 的 token 粒度（`_` `.` `/` 是分隔符）逐个子词纠正；
-  3. `loosened`：`buildOrQuery` 把 AND 放宽成 OR，救「多词里有一个写错」。
+  3. `cjk-loose`：`buildCjkLooseQuery`，把单条 CJK 词的 bigram 用 OR 连起来，
+     救「尾字写错」（`预研旧` → `"预研" OR "研旧"`）。中文没有拼写概念，
+     编辑距离纠错对 CJK 用不上 —— 缺了这一级，模糊搜索对中文等于无效。
+     限制：只处理单个 CJK token、bigram 数 2–3（再长必须整体命中，否则等于放弃精确性）。
+  4. `loosened`：`buildOrQuery` 把 AND 放宽成 OR，救「多词里有一个写错」。
   顺序不能颠倒：先纠错会让本可前缀命中的查询被拉偏。
   放宽失败就返回 0 命中，**绝不编造**。
 - 词表缓存挂在 db 上的 WeakMap，用 `store.contentVersion()` 失效；

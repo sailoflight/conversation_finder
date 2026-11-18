@@ -48,6 +48,8 @@ const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude 
   --no-dedupe         关闭近似重复折叠（默认开启）
   --no-fuzzy          关闭模糊级联（前缀/纠错/放宽），只做精确匹配
   --exclude-self      排除「当前正在写入的会话」（即你自己）。找别的会话的知识时用
+  --recall            召回被压缩掉的记忆：等价于 --surface shadowed
+                      （压缩后的内容你本来就看得见；看不见的才是需要召回的）
   --min-severity <s>  audit: high|medium|low|all（默认 high；低精度熵启发式需显式 all）
   --fail-on-findings  audit: 有命中则退出码 1（适合做 CI 门禁）
   --no-index          不读写磁盘索引，用内存索引现建现查
@@ -56,7 +58,7 @@ const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude 
 退出码: 0 命中 / 1 无命中 / 2 用法错误 / 3 语料不可读
 `;
 
-const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'no-dedupe', 'no-fuzzy', 'exclude-self']);
+const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall']);
 const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'before', 'after', 'pattern', 'min-severity', 'source']);
 
 /** 解析 argv → { positional, flags }。未知选项直接报错，避免静默忽略。 */
@@ -169,6 +171,9 @@ export function main(argv = process.argv.slice(2)) {
     const json = flags.json === true;
     const maxChars = num(flags['max-chars'], 1500);
     const terse = flags.terse === true;
+    // --recall 是 --surface shadowed 的语义化别名。显式 --surface 优先，
+    // 否则 --recall 会静默覆盖用户明确写的值。
+    const surface = flags.recall === true ? (typeof flags.surface === 'string' ? flags.surface : 'shadowed') : flags.surface;
 
     // 作用域收窄必须在 sync 之后算：selfSessionId 依赖 files 表里刚刷新的 mtime。
     // 早算会用到上一轮的 mtime，排除的可能是「上一次」正在写的会话（曾经写反过顺序）。
@@ -252,7 +257,7 @@ export function main(argv = process.argv.slice(2)) {
       fuzzy: flags['no-fuzzy'] !== true,
       limit: num(flags.limit, 10),
       includeReasoning: flags['no-reasoning'] !== true,
-      surface: flags.surface ?? 'all',
+      surface: surface ?? 'all',
     });
     const count = result.total;
     process.stdout.write(

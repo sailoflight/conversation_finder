@@ -151,6 +151,27 @@ const TOOLS = [
     },
   },
   {
+    name: 'recall',
+    description:
+      '召回**已经被压缩掉**的记忆：只搜 surface=shadowed 的部分（模型已看不见、磁盘上还在）。\n' +
+      '为什么它比 search 更准：压缩之后，你的上下文里只剩摘要与新消息 —— 那些「看得见」的内容' +
+      '已经被你记住了，再搜一遍纯属浪费；真正想不起来的，恰好就是被压缩掉的那一半。\n' +
+      '典型用途：想不起用户最初下达的指令 / 早先确认过的某个决定 / 之前踩过的坑，就用这个。\n' +
+      '默认搜调用方自己的会话；配 all:true 可跨会话召回。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '要回忆的关键词，中文/英文都行。拿不准就写宽一点。' },
+        ...SCOPE_PROPS,
+        limit: { type: 'number', description: '命中条数上限，默认 10。' },
+        includeReasoning: { type: 'boolean', description: '是否包含 reasoning（默认 true）。' },
+        source: { type: 'string', description: '限定来源，逗号分隔。默认全部。' },
+        terse: { type: 'boolean', description: '精简输出。' },
+      },
+      required: ['query'],
+    },
+  },
+  {
     name: 'show',
     description:
       '取某条事件的原文窗口（L3 全文层）。search 的 hit 里带 seq，用它来取全文。' +
@@ -244,6 +265,27 @@ function callTool(name, args) {
       const suffix =
         result.total === 0
           ? '\n\n（没有命中，模糊放宽也没救回来。可换更短的关键词，或缩小 scope 到某个会话。）'
+          : '';
+      return text(body + suffix);
+    }
+    case 'recall': {
+      const query = String(args.query ?? '').trim();
+      if (!query) throw new Error('query 不能为空');
+      const scope = scopeOf(args, target);
+      const result = search(target, {
+        query,
+        scope,
+        limit: Number.isFinite(Number(args.limit)) ? Number(args.limit) : 10,
+        includeReasoning: args.includeReasoning !== false,
+        surface: 'shadowed',      // 固定：这就是 recall 与 search 的唯一区别
+        fuzzy: true,
+        dedupe: true,
+      });
+      const body = renderHits(result, { json: false, maxChars: 2000, scope: describeScope(scope), terse: args.terse === true });
+      // 召回失败和普通搜索失败的含义不同：要提示「可能是压根没被压缩过」。
+      const suffix =
+        result.total === 0
+          ? '\n\n（没有召回内容。可能是这个会话还没被压缩过 —— 那就直接用 search，或用 outline 看全貌。）'
           : '';
       return text(body + suffix);
     }
