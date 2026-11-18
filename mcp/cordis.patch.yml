@@ -1,0 +1,13 @@
+# cfind-mcp — 把会话历史检索器接成 DSH 原生工具（mcp__cfind__search 等）
+#
+# 唯一需要改的地方：下面 args 里的绝对路径指向本项目 bin/cfind-mcp.mjs。
+#   sed -i "s#__CFIND_MCP__#$PWD/bin/cfind-mcp.mjs#" mcp/cordis.patch.yml
+- insert:
+    - id: cfind-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: cfind
+        transport: stdio
+        command: node
+        args: ['__CFIND_MCP__']
+        failOnStartupError: true

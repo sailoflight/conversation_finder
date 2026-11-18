@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# cfind — 无需 npm link 的本地入口（agent 可直接 ./cfind <query>）
+set -euo pipefail
+exec node "$(dirname "$(readlink -f "$0")")/bin/cfind.mjs" "$@"

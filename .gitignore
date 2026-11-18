@@ -1,0 +1,6 @@
+# 生成的测试语料与本地索引，不入库
+tests/fixtures/sessions/
+node_modules/
+*.db
+*.db-wal
+*.db-shm

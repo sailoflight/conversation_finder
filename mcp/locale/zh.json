@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "cfind — 会话历史检索",
+    "description": "把会话历史检索接成原生工具（含已被压缩掉的内容）：search / show / outline / audit。",
+    "detail": "docs/DETAIL.md"
+  }
+}

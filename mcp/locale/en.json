@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "cfind — session history search",
+    "description": "Search agent session history (including content already compacted away) as native tools: search, show, outline, audit.",
+    "detail": "docs/DETAIL.md"
+  }
+}
