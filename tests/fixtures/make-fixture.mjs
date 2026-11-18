@@ -11,13 +11,28 @@
 // 用法：
 //   node tests/fixtures/make-fixture.mjs          # 生成到 tests/fixtures/sessions
 //   import { buildFixture } from '.../make-fixture.mjs'; buildFixture(dir)
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { zstdCompressSync } from 'node:zlib';
 import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-export const FIXTURE_DIR = join(HERE, 'sessions');
+
+/**
+ * **每个测试进程一份** fixture，不再共享磁盘目录。
+ *
+ * 早先它是 `tests/fixtures/sessions`（仓库内固定路径），且生成逻辑第一步就
+ * `rmSync`。而 `node --test` 会**并行跑多个测试文件**，其中 6 个都 import 本模块，
+ * 于是出现真实竞态：
+ *   · A 进程看到目录不存在 → 开始生成 → 先删后写；
+ *   · B 进程此刻 cpSync 这份「写了一半」的目录 → 拿到残缺/多余会话；
+ *   · 表现是偶发的 `8 !== 2` 这类断言失败，而且只在机器忙时出现。
+ *
+ * 改成按进程 mkdtemp 后：没有共享可变状态，也就不需要 existsSync 判断，
+ * 每个进程 30ms 左右的生成成本完全可以接受。
+ */
+export const FIXTURE_DIR = mkdtempSync(join(tmpdir(), 'cfind-fixture-'));
 
 /** 每行一个事件，逐行压成一帧（模拟真实 DSH 的多帧布局）。 */
 export function writeSessionFile(path, events) {
@@ -149,8 +164,13 @@ function sessionB() {
   return ev;
 }
 
-/** 生成（或重建）固定语料目录，返回其路径。 */
+/**
+ * 生成（或重建）语料目录，返回其路径。
+ * 默认写到本进程专属的 mkdtemp 目录：**会先清空目标**，所以绝不能共享。
+ */
 export function buildFixture(dir = FIXTURE_DIR) {
+  // 只在独占目录上调用（本进程 mkdtemp 或测试自己的副本），
+  // 绝不要指向仓库内的共享路径 —— 那正是竞态的来源。
   rmSync(dir, { recursive: true, force: true });
   writeSessionFile(join(dir, '--tmp-fixture-demo--', SESSION_A, 'session.v4.jsonl.zstd'), sessionA());
   writeSessionFile(join(dir, '--tmp-fixture-demo--', SESSION_B, 'session.v4.jsonl.zstd'), sessionB());
@@ -158,6 +178,14 @@ export function buildFixture(dir = FIXTURE_DIR) {
 }
 
 export const SESSION_IDS = { A: SESSION_A, B: SESSION_B };
+
+/**
+ * **import 时就绪**：消费方不需要（也不该）再用 `existsSync` 判断。
+ * 早先的 `if (!existsSync(FIXTURE_DIR)) buildFixture();` 是错误的双保险：
+ * FIXTURE_DIR 一旦换成 mkdtemp，目录是"存在但空"的，判断为真就跳过生成，
+ * 于是测试拿到空目录、断言全变 0。让本模块自己负责就绪状态最省心。
+ */
+buildFixture();
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const dir = buildFixture();

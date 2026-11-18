@@ -30,8 +30,7 @@ const T0 = 1794990000000; // 与 make-fixture.mjs 的基准时间一致
 const PROJECT = '--tmp-fixture-demo--';
 const COPY_PREFIX = 'cfind-store-';
 
-// fixture 是确定性语料；若尚未生成则生成一次（存在时绝不重建，避免踩到别的测试）。
-if (!existsSync(FIXTURE_DIR)) buildFixture();
+// fixture 在 import 时已就绪（每进程一份 mkdtemp，无共享可变状态）。
 
 /** fixture 的临时副本（每个测试一份，互不影响）。 */
 function copyFixture() {
@@ -80,7 +79,7 @@ test('首建：全量解析 fixture，sessions/events/docs 与会话元数据正
   const root = copyFixture();
   const db = freshDb();
   try {
-    const result = syncIndex(db, { root });
+    const result = syncIndex(db, { root, only: ['dsh'] });
     assert.equal(result.filesScanned, 2);
     assert.equal(result.filesRebuilt, 2);
     assert.equal(result.filesAppended, 0);
@@ -165,14 +164,14 @@ test('空跑：size/mtime 未变则整文件跳过，零解码零写入', () => 
   const db = freshDb();
   const pathA = fileOf(root, A);
   try {
-    syncIndex(db, { root });
+    syncIndex(db, { root, only: ['dsh'] });
     const before = {
       stats: stats(db),
       files: db.prepare('SELECT path, indexed_at, frame_offset FROM files ORDER BY path').all(),
       docs: db.prepare('SELECT session_id, seq, kind, body FROM docs ORDER BY session_id, seq, kind').all(),
     };
 
-    const result = syncIndex(db, { root });
+    const result = syncIndex(db, { root, only: ['dsh'] });
     assert.equal(result.filesScanned, 2);
     assert.equal(result.filesSkipped, 2);
     assert.equal(result.filesRebuilt, 0);
@@ -190,7 +189,7 @@ test('空跑：size/mtime 未变则整文件跳过，零解码零写入', () => 
     if (process.getuid?.() !== 0) {
       chmodSync(pathA, 0o000);
       try {
-        const blocked = syncIndex(db, { root });
+        const blocked = syncIndex(db, { root, only: ['dsh'] });
         assert.equal(blocked.filesSkipped, 2);
         assert.deepEqual(blocked.errors, []);
         assert.deepEqual(stats(db), before.stats);
@@ -208,7 +207,7 @@ test('追加帧：只解新帧并新增对应文档，压缩语义增量传播',
   const db = freshDb();
   const pathA = fileOf(root, A);
   try {
-    syncIndex(db, { root });
+    syncIndex(db, { root, only: ['dsh'] });
     const oldSize = statSync(pathA).size;
     const before = stats(db);
 
@@ -216,7 +215,7 @@ test('追加帧：只解新帧并新增对应文档，压缩语义增量传播',
     const newSize = statSync(pathA).size;
     assert.ok(newSize > oldSize);
 
-    const result = syncIndex(db, { root });
+    const result = syncIndex(db, { root, only: ['dsh'] });
     assert.equal(result.filesScanned, 2);
     assert.equal(result.filesAppended, 1);
     assert.equal(result.filesSkipped, 1);
@@ -283,7 +282,7 @@ test('截断/重写：size 变小则清旧行后整文件重建', () => {
   const db = freshDb();
   const pathA = fileOf(root, A);
   try {
-    syncIndex(db, { root });
+    syncIndex(db, { root, only: ['dsh'] });
     assert.equal(count(db, 'SELECT COUNT(*) AS c FROM docs WHERE body LIKE ?', '%landlock partial%'), 1);
 
     // 只保留 header + title(seq1) + user(seq2)：文件明显变小。
@@ -291,7 +290,7 @@ test('截断/重写：size 变小则清旧行后整文件重建', () => {
     writeSessionFile(pathA, events.slice(0, 3));
     const newSize = statSync(pathA).size;
 
-    const result = syncIndex(db, { root });
+    const result = syncIndex(db, { root, only: ['dsh'] });
     assert.equal(result.filesRebuilt, 1);
     assert.equal(result.filesAppended, 0);
     assert.equal(result.filesSkipped, 1);
@@ -333,10 +332,10 @@ test('消失文件：删除文件后清掉 files 行及孤儿会话', () => {
   const root = copyFixture();
   const db = freshDb();
   try {
-    syncIndex(db, { root });
+    syncIndex(db, { root, only: ['dsh'] });
     rmSync(join(root, PROJECT, A), { recursive: true, force: true });
 
-    const result = syncIndex(db, { root });
+    const result = syncIndex(db, { root, only: ['dsh'] });
     assert.equal(result.filesScanned, 1);
     assert.equal(result.filesRebuilt, 0);
     assert.equal(result.filesAppended, 0);
@@ -366,7 +365,7 @@ test('单文件失败：记 errors[] 并继续处理其他文件，不整体崩�
     // 在期望是会话文件的位置放一个目录：listSessionFiles 会把它算进去，readFileSync 抛 EISDIR。
     mkdirSync(join(brokenDir, 'session.v4.jsonl.zstd'), { recursive: true });
 
-    const result = syncIndex(db, { root });
+    const result = syncIndex(db, { root, only: ['dsh'] });
     assert.equal(result.filesScanned, 3);
     assert.equal(result.errors.length, 1);
     assert.match(result.errors[0], /session-broken-0000/);
@@ -429,7 +428,7 @@ test('会话 id 兜底与 parentSession：header 缺失退回目录名，parent_
     ]);
 
     const db = freshDb();
-    const result = syncIndex(db, { root });
+    const result = syncIndex(db, { root, only: ['dsh'] });
     assert.deepEqual(result.errors, []);
     assert.equal(result.filesRebuilt, 2);
     assert.equal(result.sessions, 2);

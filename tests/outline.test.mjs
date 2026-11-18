@@ -82,7 +82,7 @@ function sessionD() {
 writeSessionFile(join(SESSIONS, D_PROJECT, D_ID, 'session.v4.jsonl.zstd'), sessionD());
 
 const db = openDb(join(HOME, 'index.db'));
-syncIndex(db, { root: SESSIONS });
+syncIndex(db, { root: SESSIONS, only: ['dsh'] });
 
 after(() => {
   try {

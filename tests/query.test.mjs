@@ -54,7 +54,7 @@ function sessionC() {
 writeSessionFile(join(SESSIONS, '--tmp-noise-demo--', C_ID, 'session.v4.jsonl.zstd'), sessionC());
 
 const db = openDb(join(HOME, 'index.db'));
-syncIndex(db, { root: SESSIONS });
+syncIndex(db, { root: SESSIONS, only: ['dsh'] });
 
 after(() => {
   try {

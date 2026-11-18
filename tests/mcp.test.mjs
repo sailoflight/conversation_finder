@@ -29,11 +29,28 @@ function makeHome() {
  * 极简 MCP 客户端：换行分隔 JSON-RPC，按 id 配对响应。
  * 不用官方 SDK，这样能独立验证「服务端的线上行为」而不是被 SDK 掩盖。
  */
+/**
+ * 让子进程**只看到测试自己的语料**：把其它来源的根目录指到不存在的位置。
+ * 否则本机真实的 ~/.claude / ~/.codex / ~/.opencode 会被一起索引，
+ * 断言里的会话数就不取决于 fixture 了 —— 这种测试在别人机器上必挂。
+ */
+function isolatedEnv(home) {
+  return {
+    ...process.env,
+    DSH_HOME: home,
+    CFIND_HOME: join(home, 'cfind-data'),
+    CLAUDE_HOME: join(home, 'no-claude'),
+    CODEX_HOME: join(home, 'no-codex'),
+    OPENCODE_DIR: join(home, 'no-opencode'),
+  };
+}
+
 function connect(home) {
   const child = spawn(process.execPath, ['--no-warnings', SERVER], {
     stdio: ['pipe', 'pipe', 'pipe'],
     // CFIND_HOME 必须隔离：测试是并行的，共用全局索引库会互相删对方的会话。
-    env: { ...process.env, DSH_HOME: home, CFIND_HOME: join(home, 'cfind-data') },
+    // 其它来源的根目录也要指走，否则会把本机真实会话索引进来，断言就不受控了。
+    env: isolatedEnv(home),
   });
   let buffer = '';
   const pending = new Map();

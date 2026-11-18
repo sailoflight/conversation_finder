@@ -22,13 +22,27 @@ function makeHome() {
   return home;
 }
 
+/**
+ * 让子进程**只看到测试自己的语料**：把其它来源的根目录指到不存在的位置。
+ * 否则本机真实的 ~/.claude / ~/.codex / ~/.opencode 会被一起索引，
+ * 断言里的会话数就不取决于 fixture 了 —— 这种测试在别人机器上必挂。
+ */
+function isolatedEnv(home) {
+  return {
+    ...process.env,
+    DSH_HOME: home,
+    CFIND_HOME: join(home, 'cfind-data'),
+    CLAUDE_HOME: join(home, 'no-claude'),
+    CODEX_HOME: join(home, 'no-codex'),
+    OPENCODE_DIR: join(home, 'no-opencode'),
+  };
+}
+
 function run(home, args, extraEnv = {}) {
   const result = spawnSync(process.execPath, ['--no-warnings', BIN, ...args], {
     encoding: 'utf8',
     env: {
-      ...process.env,
-      DSH_HOME: home,
-      CFIND_HOME: join(home, 'cfind-data'),
+      ...isolatedEnv(home),
       CFIND_NO_INDEX: '1',
       DSH_SESSION_ID: '',
       ...extraEnv,
