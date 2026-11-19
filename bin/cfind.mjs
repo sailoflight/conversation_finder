@@ -19,6 +19,7 @@ import { renderHits, renderShow, renderOutline, renderAudit, renderStats, hitNot
 const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude Code / Codex / OpenCode）
 用法（grep 形状：输出 <session>:<seq>:<text>，一行一条，可直接管道）:
   cfind <pattern>                    搜当前会话（agent 默认搜自己，无需传参）
+  cfind '<正则>' --regex             表达式检索（grep 同款）
   cfind <pattern> --all              搜全部会话（相当于 grep -r）
   cfind <pattern> | cut -d: -f1      哪些会话提到了它
   cfind show <session> <seq>         取某条命中的原文上下文（相当于 -A/-B）
@@ -46,8 +47,11 @@ const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude 
                       默认自适应：自己的会话搜 shadowed，别的会话搜 all
   --recall            等价 --surface shadowed：只看「已被压缩掉、看不见」的那半
   --visible           等价 --surface current：只看「压缩之后、看得见」的那半
-  --exclude <regions> 排除指定区域，逗号分隔：tool（调用+输出）、reasoning、
-                      title、system、assistant、user、compaction
+  --exclude <regions> 排除指定区域，逗号分隔或重复给：tool（调用+输出）、
+                      reasoning、title、system、assistant、user、compaction
+  --regex             把 pattern 当正则（grep 同款，如 '幂等键.*(冲突|重复)'）。
+                      默认是关键词检索：走 FTS 索引，支持中文 bigram 与模糊纠错。
+                      正则走全表扫描（约 100ms），且有超时保护（防回溯爆炸）。
   --context <n>       每条命中前后各取 N 条事件（grep -C）
   --list              只列提及它的会话（grep -l），不返回命中正文
   --exclude-self      排除当前正在写入的会话（即你自己）
@@ -71,7 +75,7 @@ stdout 只放结果；命中总数、模糊放宽、去重折叠这些"工具自
 退出码: 0 命中 / 1 无命中 / 2 用法错误 / 3 语料不可读
 `;
 
-const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'verbose', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall', 'visible', 'list']);
+const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'verbose', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall', 'visible', 'list', 'regex']);
 const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'context', 'before', 'after', 'pattern', 'min-severity', 'source', 'find', 'exclude']);
 
 /** 解析 argv → { positional, flags }。未知选项直接报错，避免静默忽略。 */
@@ -98,7 +102,10 @@ export function parseArgs(argv) {
         if (name === 'project') flags.project = true;
         else throw new UsageError(`--${name} 需要一个值`);
       } else {
-        flags[name] = value;
+        // --exclude 可重复，也支持逗号串：`--exclude tool --exclude reasoning`
+        // 与 `--exclude tool,reasoning` 等价。grep 的 -e 也是可重复的。
+        if (name === 'exclude') flags.exclude = [...(flags.exclude ?? []), value];
+        else flags[name] = value;
         i += 1;
       }
     } else {
@@ -304,6 +311,7 @@ export function main(argv = process.argv.slice(2)) {
       surface,
       context: wantList ? 0 : context,
       exclude: flags.exclude,
+      regex: flags.regex === true,
     });
 
     // --list = grep -l：只回「哪些会话提到了它」。内部多取一些再按会话去重，

@@ -125,9 +125,28 @@ type Scope =
 **不需要参数**表达这件事 —— 参数越少越好，而这条规则是确定的。
 CLI 仍保留 `--surface` / `--recall` / `--visible` 供精确控制；MCP 不暴露。
 
+### 表达式检索（`regex: true` / `--regex`）
+
+FTS5 没有正则能力，所以这条路必须**全表扫** `docs.body`（经 SQLite 自定义函数
+`regexp()`）。实测 6.8M 字符约 91ms，是 FTS 的 14 倍 —— 这是全表扫的固有代价。
+
+**不做默认**：grep 默认正则，是因为它没有索引；我们默认走 FTS，因为中文 bigram、
+拼写纠错、模糊放宽都是正则给不了的。两种能力互斥，用 flag 分开。
+
+**必须隔离执行**：grep 用 DFA（线性），JS `RegExp` 是回溯引擎。
+`(a+)+$` 在 30 个 `a` 上要 19 秒，而语料里有 64,000 字符的事件 ——
+在主线程直接跑等于让 agent 的工具调用永久挂住。
+
+因此正则跑在 `lib/regex-worker.mjs`，主线程 `Atomics.wait` 限时（默认 5s），
+超时 `terminate` 并抛 `userFacing` 错误。**中止后进程必须仍可用**，有测试钉住。
+
+正则模式下没有 bm25，`score` 用 kind 权重（与 LIKE 路径同一套），按 `time` 倒序。
+
 ### 区域排除（grep 没有的能力）
 
-`exclude` 参数接受区域名或 kind 名，逗号分隔，映射见 `REGION_KINDS`：
+`exclude` 接受**数组**（MCP：schema 里带 `enum`，合法值一眼可见）或**逗号串/重复 flag**
+（CLI：`--exclude tool,reasoning` 与 `--exclude tool --exclude reasoning` 等价），
+映射见 `REGION_KINDS`：
 `tool`(tool-call+tool-result) / `reasoning` / `assistant` / `user` / `title` /
 `system`(other) / `compaction`。
 

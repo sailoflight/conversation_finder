@@ -137,8 +137,16 @@ const TOOLS = [
         all: { type: 'boolean', description: '搜全部会话。默认只搜当前会话。' },
         context: { type: 'number', description: '每条命中前后各取 N 条事件（grep -C）。不给只看命中行。' },
         exclude: {
-          type: 'string',
-          description: '排除区域，逗号分隔：tool（调用+输出）、reasoning、title、system、assistant、user。工具输出常占六成以上，噪音大时值得排掉。',
+          type: 'array',
+          items: {
+            type: 'string',
+            enum: ['tool', 'reasoning', 'assistant', 'user', 'title', 'system', 'compaction'],
+          },
+          description: '排除区域。tool = 工具调用+输出（实测占六成以上，噪音大时排掉）；reasoning = 思考过程。',
+        },
+        regex: {
+          type: 'boolean',
+          description: '把 query 当正则（grep 同款）。默认走关键词索引，支持中文与模糊纠错；正则走全表扫描，较慢且有超时保护。',
         },
         limit: { type: 'number', description: '最多几条命中，默认 10。' },
         list: { type: 'boolean', description: '只列提及它的会话（grep -l），不返回命中正文。' },
@@ -201,6 +209,7 @@ function callTool(name, args) {
         context,
         surface,
         exclude: args.exclude,
+        regex: args.regex === true,
       });
       const body = renderHits(result, { json: false, maxChars: 2000, scope: describeScope(scope) });
       const notes = hitNotes(result);

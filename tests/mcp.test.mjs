@@ -138,7 +138,7 @@ test('MCP: 只暴露 2 个工具、8 个参数（尽量少的接口税）', asyn
       (sum, tool) => sum + Object.keys(tool.inputSchema.properties ?? {}).length,
       0,
     );
-    assert.equal(params, 8, `参数总数应保持 8，实际 ${params}`);
+    assert.equal(params, 9, `参数总数应保持 9，实际 ${params}`);
     // show / outline / stats / index 都已被 grep 式 flag 取代，不该再单独出现
     for (const gone of ['show', 'outline', 'stats', 'index']) {
       assert.ok(!names.includes(gone), `${gone} 应该被 context/list/自动同步取代`);
@@ -336,7 +336,7 @@ test('MCP: 接口税不超标（工具数 / 参数量 / 描述长度都钉住）
     // 想加东西就得先改这里的断言 —— 那是一次有意识的决定，不是顺手膨胀。
     assert.ok(tools.length <= 2, `工具数应 <=2，实际 ${tools.length}`);
     const params = tools.reduce((sum, tool) => sum + Object.keys(tool.inputSchema.properties ?? {}).length, 0);
-    assert.ok(params <= 8, `参数总数应 <=8，实际 ${params}`);
+    assert.ok(params <= 9, `参数总数应 <=9，实际 ${params}`);
 
     // 粗粒度 token 估算：CJK/1.5 + ASCII/4
     const cjk = (text) => (String(text).match(/[\u4e00-\u9fff]/g) ?? []).length;
@@ -345,8 +345,64 @@ test('MCP: 接口税不超标（工具数 / 参数量 / 描述长度都钉住）
       (sum, tool) => sum + approx(tool.description ?? '') + approx(JSON.stringify(tool.inputSchema)),
       0,
     );
-    // 实测 264 tok。给 1.5 倍余量以免因措辞微调就挂，但能挡住"再加个工具"。
-    assert.ok(tax <= 400, `接口税 ${tax} tok 超预算（<=400）`);
+    // 实测 324 tok（exclude 的 enum 数组换来「合法值一眼可见」，值 59 tok）。
+    // 给 1.5 倍余量以免因措辞微调就挂，但能挡住"再加个工具"。
+    assert.ok(tax <= 500, `接口税 ${tax} tok 超预算（<=500）`);
+  } finally {
+    client.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('MCP: exclude 是带 enum 的数组（agent 一眼看到合法值，不必试错）', async () => {
+  const home = makeHome();
+  const client = connect(home);
+  try {
+    await client.request('initialize', initParams);
+    const { result } = await client.request('tools/list', {});
+    const searchTool = result.tools.find((tool) => tool.name === 'search');
+    const prop = searchTool.inputSchema.properties.exclude;
+
+    // 用数组而不是逗号字符串：枚举值写进 schema，调用方不必猜、也不必试错。
+    assert.equal(prop.type, 'array');
+    assert.equal(prop.items.type, 'string');
+    assert.deepEqual(prop.items.enum, ['tool', 'reasoning', 'assistant', 'user', 'title', 'system', 'compaction']);
+
+    // 真的能用
+    const response = await client.request('tools/call', {
+      name: 'search',
+      arguments: { query: '幂等键', all: true, exclude: ['tool', 'reasoning'], limit: 3 },
+    });
+    const text = response.result.content[0].text;
+    assert.ok(!/^cfind error:/m.test(text), `不该报错：${text.slice(0, 120)}`);
+
+    // 非法值应当报错而不是被静默忽略
+    const bad = await client.request('tools/call', {
+      name: 'search',
+      arguments: { query: '幂等键', exclude: ['nonsense'] },
+    });
+    assert.equal(bad.result.isError, true, '未知区域必须报错，静默忽略会让人以为排除了');
+  } finally {
+    client.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('MCP: regex 参数存在且能跑（表达式检索）', async () => {
+  const home = makeHome();
+  const client = connect(home);
+  try {
+    await client.request('initialize', initParams);
+    const { result } = await client.request('tools/list', {});
+    const searchTool = result.tools.find((tool) => tool.name === 'search');
+    assert.equal(searchTool.inputSchema.properties.regex.type, 'boolean');
+
+    const response = await client.request('tools/call', {
+      name: 'search',
+      arguments: { query: '幂等键|settlement_id', all: true, regex: true, limit: 3 },
+    });
+    const text = response.result.content[0].text;
+    assert.match(text, /^\w+:\d+:/m, `正则应当返回 grep 形状的命中：${text.slice(0, 120)}`);
   } finally {
     client.close();
     rmSync(home, { recursive: true, force: true });
