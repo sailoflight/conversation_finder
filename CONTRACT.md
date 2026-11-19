@@ -113,21 +113,27 @@ type Scope =
 - 没传 `find` 且索引内容明显多于显示内容时，必须报告 `target.hidden` 并提示用 `find`。
   静默丢掉内容会让用户误判"命中是错的"。
 
-### surface 的默认值（CLI/MCP 层，不是 query 层）
+### surface 默认值：按作用域自适应（零重复原则）
 
-`query.search()` 本身默认 `surface: 'all'`；**CLI 与 MCP 的默认是 `current`**。
+`query.search()` 默认 `surface: 'all'`；**CLI 与 MCP 用 `paths.defaultSurface()`**：
 
-理由：`/compact` 之后 agent 的上下文 = 摘要 + 压缩后的新消息。压缩前的内容是**归档**，
-与 grep「搜现存文件」的直觉一致 —— 要搜归档得显式说。
-
-| 入口 | 默认 | 另一半 |
+| 作用域 | 默认 surface | 理由 |
 |---|---|---|
-| CLI | `--surface current` | `--recall` / `--surface shadowed` / `--surface all` |
-| MCP | `current` | `recall: true` → `shadowed`（两者不重叠，无 `all`） |
+| 自己的会话 | `shadowed`（压缩前） | 压缩后的内容仍在我的上下文里，检索它只是复制 |
+| 别人的会话 / 全局 | `all` | 别人的压缩前历史从没进过我的上下文，排除只丢信息 |
 
-参数名的选择：`recall` 是**行为**（"我想不起来了"），不是机制（`surface: shadowed`）。
-agent 已经内化 grep 的 `-r/-C/-l/-m`，这 5 个参数照抄；只有这一个需要新词，
-所以它必须用行为语言。
+**不需要参数**表达这件事 —— 参数越少越好，而这条规则是确定的。
+CLI 仍保留 `--surface` / `--recall` / `--visible` 供精确控制；MCP 不暴露。
+
+### 区域排除（grep 没有的能力）
+
+`exclude` 参数接受区域名或 kind 名，逗号分隔，映射见 `REGION_KINDS`：
+`tool`(tool-call+tool-result) / `reasoning` / `assistant` / `user` / `title` /
+`system`(other) / `compaction`。
+
+- 实测 `tool + reasoning` 占全部文档 77%、命中 85%，排除后可把 216 条命中降到 15。
+- **未知区域必须报错**，不能静默忽略 —— 那会让人以为排除了却没排除，比报错危险。
+- 系统提示词默认不索引（`system/message` 在 SKIP_TYPES 里），无需额外排除。
 
 ### surface 语义（`--recall` 的全部依据）
 

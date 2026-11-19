@@ -9,7 +9,7 @@
 //   · 退出码与 grep 对齐：0 有命中 / 1 无命中 / 2 用法或索引错误 / 3 语料不可读。
 import { existsSync } from 'node:fs';
 import { openDb } from '../lib/schema.mjs';
-import { indexPath, sessionsRoot, listSessionFiles, resolveScope, describeScope, shortId, selfSessionId } from '../lib/paths.mjs';
+import { indexPath, sessionsRoot, listSessionFiles, resolveScope, describeScope, shortId, selfSessionId, defaultSurface } from '../lib/paths.mjs';
 import { syncIndex, stats } from '../lib/store.mjs';
 import { search, show, resolveSessionIds } from '../lib/query.mjs';
 import { outline } from '../lib/outline.mjs';
@@ -42,9 +42,12 @@ const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude 
   --max-chars <n>     输出字符预算（默认 1500）
   --json              机器可读输出（完整字段，含 title/kind/surface/score）
   --verbose           富格式：加 scope 首行、kind/surface、会话标题（人读更舒服）
-  --surface <s>       current（默认，压缩后）| shadowed（压缩前）| all
-                      默认排除上一次压缩之前的内容
-  --recall            等价 --surface shadowed：只搜「已被压缩掉、你看不见」的部分
+  --surface <s>       shadowed（压缩前）| current（压缩后）| all
+                      默认自适应：自己的会话搜 shadowed，别的会话搜 all
+  --recall            等价 --surface shadowed：只看「已被压缩掉、看不见」的那半
+  --visible           等价 --surface current：只看「压缩之后、看得见」的那半
+  --exclude <regions> 排除指定区域，逗号分隔：tool（调用+输出）、reasoning、
+                      title、system、assistant、user、compaction
   --context <n>       每条命中前后各取 N 条事件（grep -C）
   --list              只列提及它的会话（grep -l），不返回命中正文
   --exclude-self      排除当前正在写入的会话（即你自己）
@@ -68,8 +71,8 @@ stdout 只放结果；命中总数、模糊放宽、去重折叠这些"工具自
 退出码: 0 命中 / 1 无命中 / 2 用法错误 / 3 语料不可读
 `;
 
-const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'verbose', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall', 'list']);
-const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'context', 'before', 'after', 'pattern', 'min-severity', 'source', 'find']);
+const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'verbose', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall', 'visible', 'list']);
+const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'context', 'before', 'after', 'pattern', 'min-severity', 'source', 'find', 'exclude']);
 
 /** 解析 argv → { positional, flags }。未知选项直接报错，避免静默忽略。 */
 export function parseArgs(argv) {
@@ -181,20 +184,10 @@ export function main(argv = process.argv.slice(2)) {
     const json = flags.json === true;
     const maxChars = num(flags['max-chars'], 1500);
     const terse = flags.terse === true;
-    // --recall 是 --surface shadowed 的语义化别名。显式 --surface 优先，
-    // 否则 --recall 会静默覆盖用户明确写的值。
-    // 默认「排除上一次压缩之前」= 只搜压缩之后（current）。
-    // 显式 --surface 始终优先，--recall 是它的行为化快捷方式。
-    const surface =
-      typeof flags.surface === 'string'
-        ? flags.surface
-        : flags.recall === true
-          ? 'shadowed'
-          : 'current';
-
     // 作用域收窄必须在 sync 之后算：selfSessionId 依赖 files 表里刚刷新的 mtime。
     // 早算会用到上一轮的 mtime，排除的可能是「上一次」正在写的会话（曾经写反过顺序）。
-    const excludeSelf = flags['exclude-self'] === true ? selfSessionId(db) : undefined;
+    const self = selfSessionId(db);
+    const excludeSelf = flags['exclude-self'] === true ? self : undefined;
     const scopeFinal =
       only === undefined && excludeSelf === undefined
         ? scope
@@ -203,6 +196,19 @@ export function main(argv = process.argv.slice(2)) {
             ...(only === undefined ? {} : { sources: only }),
             ...(excludeSelf === undefined ? {} : { exclude: [excludeSelf] }),
           };
+
+    // surface 的默认按作用域自适应（见 paths.defaultSurface）：
+    //   自己的会话 → shadowed（压缩前，因为压缩后我本来就看得到）
+    //   别人的会话 → all     （它们的压缩前历史我从没见过，排除只是丢信息）
+    // 显式 --surface 永远优先；--recall / --visible 是两种单向快捷方式。
+    const surface =
+      typeof flags.surface === 'string'
+        ? flags.surface
+        : flags.recall === true
+          ? 'shadowed'
+          : flags.visible === true
+            ? 'current'
+            : defaultSurface(scopeFinal, self);
 
     if (isCommand && command === 'help') {
       process.stdout.write(HELP);
@@ -291,6 +297,7 @@ export function main(argv = process.argv.slice(2)) {
       includeReasoning: flags['no-reasoning'] !== true,
       surface,
       context: wantList ? 0 : context,
+      exclude: flags.exclude,
     });
 
     // --list = grep -l：只回「哪些会话提到了它」。内部多取一些再按会话去重，
