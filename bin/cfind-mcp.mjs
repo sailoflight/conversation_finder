@@ -148,7 +148,7 @@ const TOOLS = [
             enum: ['tool', 'reasoning', 'user', 'assistant', 'title', 'system', 'compaction'],
           },
           description:
-            '按会话类型排除，取值即右列枚举：tool=工具调用+输出、reasoning=思考、user=用户输入、' +
+            '按会话类型排除：tool=工具调用+输出、reasoning=思考、user=用户输入、' +
             'assistant=模型回复、title=标题、system=系统杂项、compaction=压缩摘要。噪音大时排除 tool,reasoning',
         },
       },
