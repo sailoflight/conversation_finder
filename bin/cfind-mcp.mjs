@@ -128,31 +128,28 @@ function resolveSessionArg(target, arg) {
 // type / properties / required / additionalProperties / items / enum / const / description。
 const TOOLS = [
   {
-    // 「像 grep」是最省的描述方式：agent 已经内化 -r/-C/-l/-m/-E，
-    // 一句话就承载了这些参数的语义，不必自己叙述一遍。
-    // 唯一需要额外说明的是**与 grep 不同**的地方：默认严格字面、默认只搜本会话。
+    // 描述尽量短：grep 已内化，用 grep 的词汇当指针比自行叙述省得多。
     name: 'search',
     description:
-      '像 grep：在 agent 会话历史里找内容。默认严格字面（命中必含你搜的词，不做近义替换）。' +
+      '在 agent 会话历史里找内容。默认 grep 正则模式（pattern 是正则，子串匹配，不分大小写）。' +
       '输出 `session:seq:text`，一行一条。压缩掉的历史也能搜。',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'pattern' },
+        query: { type: 'string', description: 'pattern：正则表达式' },
         all: { type: 'boolean', description: '-r：全部会话（默认仅本会话）' },
         context: { type: 'number', description: '-C N：命中前后各取 N 条' },
         list: { type: 'boolean', description: '-l：只列会话' },
         limit: { type: 'number', description: '-m N：上限，默认 10' },
-        regex: { type: 'boolean', description: '-E：当正则' },
-        // 下面这个是 grep 没有的，必须解释
         exclude: {
           type: 'array',
           items: {
             type: 'string',
-            enum: ['tool', 'reasoning', 'assistant', 'user', 'title', 'system', 'compaction'],
+            enum: ['tool', 'reasoning', 'user', 'assistant', 'title', 'system', 'compaction'],
           },
           description:
-            'grep 没有：按区域排除。tool=工具调用+输出（噪音最大）、reasoning=思考过程',
+            '按会话类型排除，取值即右列枚举：tool=工具调用+输出、reasoning=思考、user=用户输入、' +
+            'assistant=模型回复、title=标题、system=系统杂项、compaction=压缩摘要。噪音大时排除 tool,reasoning',
         },
       },
       required: ['query'],
@@ -165,15 +162,12 @@ const TOOLS = [
       type: 'object',
       properties: {
         all: { type: 'boolean', description: '-r：全部会话（默认仅本会话）' },
-        // grep 没有的：解释清楚代价
-        deep: {
-          type: 'boolean',
-          description: 'grep 没有：连高熵启发式一起扫。能抓无前缀凭据，但 sha256/随机 id 会误报',
-        },
+        deep: { type: 'boolean', description: '启发式扫描。可能引发误报' },
       },
     },
   },
 ];
+
 
 
 
@@ -215,7 +209,6 @@ function callTool(name, args) {
         context,
         surface,
         exclude: args.exclude,
-        regex: args.regex === true,
       });
       const body = renderHits(result, { json: false, maxChars: 2000, scope: describeScope(scope) });
       const notes = hitNotes(result);

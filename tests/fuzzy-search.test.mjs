@@ -50,12 +50,14 @@ test('拼错一个字母仍能搜到（纠错路径）', () => {
   assert.match(broken.fuzzy.applied, /reconclie→reconcile/);
 });
 
-test('只记得词头也能搜到（前缀路径）', () => {
+test('词头在默认模式下就能命中（grep 的子串语义已经涵盖前缀）', () => {
+  // 默认是正则/子串匹配：`settle` 是 `settlement` 的子串，本来就该命中。
+  // 这条以前是"模糊级联的前缀级"，现在它是默认行为的一部分 ——
+  // 前缀匹配不需要额外机制，grep 语义已经免费给了我们。
   const db = makeDb(['the settlement process runs nightly', 'another document']);
-  const result = search(db, { query: 'settle', scope, limit: 5, fuzzy: true });
-  assert.equal(search(db, { query: 'settle', scope, limit: 5, fuzzy: false }).total, 0);
-  assert.ok(result.total > 0);
-  assert.equal(result.fuzzy?.what, 'prefix');
+  const result = search(db, { query: 'settle', scope, limit: 5 });
+  assert.ok(result.total > 0, '子串匹配应当命中 settlement');
+  assert.equal(result.fuzzy, undefined, '这不是"放宽"，是默认语义');
 });
 
 test('完全不存在的词不无中生有', () => {

@@ -14,6 +14,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { buildFixture, SESSION_IDS } from './fixtures/make-fixture.mjs';
 import { auditInterface, GREP_PARITY, NOVEL_BUDGET, TAX_BUDGET } from '../lib/interface.mjs';
+import { openDb } from '../lib/schema.mjs';
+import { search } from '../lib/query.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SERVER = join(ROOT, 'bin', 'cfind-mcp.mjs');
@@ -139,7 +141,7 @@ test('MCP: 只暴露 2 个工具、8 个参数（尽量少的接口税）', asyn
       (sum, tool) => sum + Object.keys(tool.inputSchema.properties ?? {}).length,
       0,
     );
-    assert.equal(params, 9, `参数总数应保持 9，实际 ${params}`);
+    assert.equal(params, 8, `参数总数应保持 8，实际 ${params}`);
     // show / outline / stats / index 都已被 grep 式 flag 取代，不该再单独出现
     for (const gone of ['show', 'outline', 'stats', 'index']) {
       assert.ok(!names.includes(gone), `${gone} 应该被 context/list/自动同步取代`);
@@ -387,7 +389,7 @@ test('MCP: exclude 是带 enum 的数组（agent 一眼看到合法值，不必�
     // 用数组而不是逗号字符串：枚举值写进 schema，调用方不必猜、也不必试错。
     assert.equal(prop.type, 'array');
     assert.equal(prop.items.type, 'string');
-    assert.deepEqual(prop.items.enum, ['tool', 'reasoning', 'assistant', 'user', 'title', 'system', 'compaction']);
+    assert.deepEqual(prop.items.enum, ['tool', 'reasoning', 'user', 'assistant', 'title', 'system', 'compaction']);
 
     // 真的能用
     const response = await client.request('tools/call', {
@@ -409,25 +411,32 @@ test('MCP: exclude 是带 enum 的数组（agent 一眼看到合法值，不必�
   }
 });
 
-test('MCP: regex 参数存在且能跑（表达式检索）', async () => {
-  const home = makeHome();
-  const client = connect(home);
-  try {
-    await client.request('initialize', initParams);
-    const { result } = await client.request('tools/list', {});
-    const searchTool = result.tools.find((tool) => tool.name === 'search');
-    assert.equal(searchTool.inputSchema.properties.regex.type, 'boolean');
+test('MCP: 默认就是 grep 正则模式（不需要参数切换）', () => {
+  // 工具叫「会话历史的 grep」，agent 就会写正则。`foo|bar` 必须是"或"，
+  // 不能变成 `foo AND bar` —— 那是静默地做了别的事，最坏的一种行为。
+  //
+  // 这里不需要起 MCP 客户端：验证的是 search 的默认语义。
+  const db = openDb(':memory:');
+  db.prepare(
+    `INSERT INTO sessions (id, source, cwd, title, created_at, agent_preset, parent_id, event_count, first_time, last_time)
+     VALUES ('re-1', 'dsh', '/tmp', 't', 1700000000000, null, null, 0, 1700000000000, 1700000000000)`,
+  ).run();
+  const insert = db.prepare(
+    'INSERT INTO docs (body, sh, source, session_id, seq, kind, time, surface) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  const add = (seq, body) => insert.run(body, body, 'dsh', 're-1', seq, 'user', 1700000000000 + seq, 'current');
+  add(1, 'alpha 相关的内容');
+  add(2, 'beta 相关的内容');
+  add(3, '只有 gamma');
 
-    const response = await client.request('tools/call', {
-      name: 'search',
-      arguments: { query: '幂等键|settlement_id', all: true, regex: true, limit: 3 },
-    });
-    const text = response.result.content[0].text;
-    assert.match(text, /^\w+:\d+:/m, `正则应当返回 grep 形状的命中：${text.slice(0, 120)}`);
-  } finally {
-    client.close();
-    rmSync(home, { recursive: true, force: true });
-  }
+  const scope = { mode: 'session', id: 're-1' };
+  assert.equal(search(db, { query: 'alpha', scope, limit: 10 }).total, 1);
+  // 交替 = 或（grep 预期）
+  assert.equal(search(db, { query: 'alpha|beta', scope, limit: 10 }).total, 2);
+  // 锚点按行匹配
+  assert.equal(search(db, { query: '^alpha', scope, limit: 10 }).total, 1);
+  // 完全没有的模式返回 0，不做任何替换
+  assert.equal(search(db, { query: 'zzz_不存在', scope, limit: 10 }).total, 0);
 });
 
 test('MCP: search 的描述必须声明「严格字面」保证', async () => {
@@ -442,10 +451,10 @@ test('MCP: search 的描述必须声明「严格字面」保证', async () => {
     const search = result.tools.find((tool) => tool.name === 'search');
     // 「像 grep」是最省的描述方式：agent 已内化 -r/-C/-l/-m/-E，
     // 一句话就承载这些参数的语义，不必自己叙述一遍。
-    assert.match(search.description, /像 grep/, '应当用「像 grep」而不是自行叙述参数语义');
-    // 但严格字面这条**必须**明说：grep 不做近义替换，我们也一样，
-    // agent 需要知道「命中即可作为证据」。
-    assert.match(search.description, /严格字面|命中必含/, '描述里必须写明严格字面保证');
+    // 第一句说"在 agent 会话历史里找内容"，紧接着说明默认语义 ——
+    // agent 需要立刻知道 pattern 是正则而不是"几个关键词"。
+    assert.match(search.description, /在 agent 会话历史里找内容/, '第一句应当直接说清是什么工具');
+    assert.match(search.description, /默认 grep 正则/, '必须说明默认是 grep 正则模式');
     // 不能反过来吹"模糊/智能"，那与默认行为矛盾
     assert.doesNotMatch(search.description, /模糊|纠错|近义词?搜索/, '默认不做模糊，描述不该暗示');
   } finally {
@@ -460,12 +469,9 @@ test('MCP: 描述里不该出现已移除/已过时的说法', async () => {
   try {
     await client.request('initialize', initParams);
     const { result } = await client.request('tools/list', {});
-    const regexProp = result.tools.find((t) => t.name === 'search').inputSchema.properties.regex;
-    // 这条描述曾经写着"支持中文与模糊纠错"，但模糊现在默认关闭，必须改掉。
-    assert.doesNotMatch(regexProp.description, /模糊纠错/, 'regex 的描述不能仍宣称模糊纠错');
-    // surface 相关参数已经从 MCP 移除，不该以任何形式回潮
+    // regex 不再是参数而是默认语义，不该再以参数形式出现
     const allProps = result.tools.flatMap((t) => Object.keys(t.inputSchema.properties ?? {}));
-    for (const gone of ['surface', 'recall', 'synonym', 'fuzzy', 'find', 'session', 'project']) {
+    for (const gone of ['regex', 'surface', 'recall', 'synonym', 'fuzzy', 'find', 'session', 'project']) {
       assert.ok(!allProps.includes(gone), `${gone} 不该出现在 MCP 参数里`);
     }
   } finally {
@@ -485,17 +491,22 @@ test('MCP: grep 同款的参数只写对应的 grep flag（不重复叙述）', 
     const { result } = await client.request('tools/list', {});
     const props = result.tools.find((tool) => tool.name === 'search').inputSchema.properties;
 
-    for (const [param, flag] of [['query', 'pattern'], ['all', '-r'], ['context', '-C'], ['list', '-l'], ['limit', '-m'], ['regex', '-E']]) {
+    for (const [param, flag] of [['query', 'pattern'], ['all', '-r'], ['context', '-C'], ['list', '-l'], ['limit', '-m']]) {
       assert.ok(
         props[param].description.includes(flag),
         `${param} 的描述里应当出现 ${flag}，方便 agent 直接映射；实际：${props[param].description}`,
       );
     }
 
-    // grep 没有的那一个必须解释清楚，否则 agent 无从知道它存在
-    assert.match(props.exclude.description, /grep 没有/, 'exclude 是 grep 没有的维度，必须说明');
+    // grep 没有的那个必须解释清楚，而且要**列全**可选值 ——
+    // agent 光看 enum 往往不会去读，描述里说清"有哪些类型"才不会漏掉 user/提示词这些。
+    assert.match(props.exclude.description, /按会话类型排除/, 'exclude 要说明是"按会话类型"');
+    for (const kind of ['tool', 'reasoning', 'user', 'assistant', 'title', 'system', 'compaction']) {
+      assert.ok(props.exclude.description.includes(kind), `exclude 描述里应列出 ${kind}`);
+    }
     const auditTool = result.tools.find((tool) => tool.name === 'audit');
-    assert.match(auditTool.inputSchema.properties.deep.description, /grep 没有/, 'deep 同样需要说明');
+    assert.match(auditTool.inputSchema.properties.deep.description, /启发式/);
+    assert.match(auditTool.inputSchema.properties.deep.description, /误报/);
   } finally {
     client.close();
     rmSync(home, { recursive: true, force: true });

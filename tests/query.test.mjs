@@ -227,3 +227,69 @@ test('show 默认跳过噪声事件（target 例外）', () => {
   assert.equal(target.text, '可显示的答案。');
   assert.equal(target.role, 'assistant');
 });
+
+// ── 默认语义 = grep 正则 ────────────────────────────────────────────────
+
+test('默认：交替真的"或"（不是被切成 AND）', () => {
+  // 关键词索引会把 `foo|bar` 当分隔符切成 `foo AND bar`，与 grep 预期相反，
+  // 而且不报错 —— 这种"静默地做了别的事"是最坏的一类行为。
+  const db = openDb(':memory:');
+  db.prepare(
+    `INSERT INTO sessions (id, source, cwd, title, created_at, agent_preset, parent_id, event_count, first_time, last_time)
+     VALUES ('g-1', 'dsh', '/tmp', 't', 1700000000000, null, null, 0, 1700000000000, 1700000000000)`,
+  ).run();
+  const insert = db.prepare(
+    'INSERT INTO docs (body, sh, source, session_id, seq, kind, time, surface) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  const add = (seq, body) => insert.run(body, body, 'dsh', 'g-1', seq, 'user', 1700000000000 + seq, 'current');
+  add(1, 'alpha 的内容');
+  add(2, 'beta 的内容');
+  add(3, 'gamma 的内容');
+
+  const scope = { mode: 'session', id: 'g-1' };
+  const only = (query) => search(db, { query, scope, limit: 10 }).total;
+
+  assert.equal(only('alpha'), 1);
+  // 交替 = 或：两个都该出现
+  assert.equal(only('alpha|beta'), 2, '交替必须是真的"或"');
+  // 锚点按行
+  assert.equal(only('^alpha'), 1);
+  assert.equal(only('^beta'), 1);
+  // 元字符真的生效
+  assert.equal(only('a.*内容'), 3);
+  // 完全没有：必须 0，不做任何替换
+  assert.equal(only('zzz_不存在_qqq'), 0);
+});
+
+test('默认：不区分大小写（与 grep 的唯一刻意差异）', () => {
+  const db = openDb(':memory:');
+  db.prepare(
+    `INSERT INTO sessions (id, source, cwd, title, created_at, agent_preset, parent_id, event_count, first_time, last_time)
+     VALUES ('g-2', 'dsh', '/tmp', 't', 1700000000000, null, null, 0, 1700000000000, 1700000000000)`,
+  ).run();
+  db.prepare(
+    'INSERT INTO docs (body, sh, source, session_id, seq, kind, time, surface) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run('The Settlement Process Runs Nightly', 'x', 'dsh', 'g-2', 1, 'user', 1700000000001, 'current');
+  const scope = { mode: 'session', id: 'g-2' };
+  assert.equal(search(db, { query: 'settlement', scope, limit: 5 }).total, 1);
+  assert.equal(search(db, { query: 'SETTLEMENT', scope, limit: 5 }).total, 1);
+});
+
+test('默认：正则语法错误要干净报错，不吐堆栈', () => {
+  const db = openDb(':memory:');
+  db.prepare(
+    `INSERT INTO sessions (id, source, cwd, title, created_at, agent_preset, parent_id, event_count, first_time, last_time)
+     VALUES ('g-3', 'dsh', '/tmp', 't', 1700000000000, null, null, 0, 1700000000000, 1700000000000)`,
+  ).run();
+  db.prepare(
+    'INSERT INTO docs (body, sh, source, session_id, seq, kind, time, surface) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run('x', 'x', 'dsh', 'g-3', 1, 'user', 1700000000001, 'current');
+  assert.throws(
+    () => search(db, { query: '未闭合(', scope: { mode: 'session', id: 'g-3' }, limit: 5 }),
+    (error) => {
+      assert.match(error.message, /正则/);
+      assert.equal(error.userFacing, true, '参数类错误要给用户看人话');
+      return true;
+    },
+  );
+});
