@@ -7,10 +7,11 @@
 //   · 索引不可写时（agent 常跑在 workspace-write 沙箱）自动降级为
 //     `:memory:` 现建现查 —— 复用同一套 store/schema，零磁盘写副作用。
 //   · 退出码与 grep 对齐：0 有命中 / 1 无命中 / 2 用法或索引错误 / 3 语料不可读。
+import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
 import { openDb } from '../lib/schema.mjs';
 import { indexPath, sessionsRoot, listSessionFiles, resolveScope, describeScope, shortId, selfSessionId, defaultSurface } from '../lib/paths.mjs';
-import { syncIndex, stats } from '../lib/store.mjs';
+import { purgeArchived, syncIndex, stats } from '../lib/store.mjs';
 import { search, show, resolveSessionIds, resolveExclude } from '../lib/query.mjs';
 import { outline } from '../lib/outline.mjs';
 import { audit, DEFAULT_PATTERNS } from '../lib/audit.mjs';
@@ -64,6 +65,8 @@ const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude 
   --before/--after <n>  show: 目标前后各取几条（默认 3）
   --full              show: 不截断
   --deep              audit: 连熵启发式一起扫（能抓无固定前缀的凭据，但 sha256/随机 id 会误报）
+  --gc                index: 清掉已归档（原始文件已被工具删除）的内容。
+                      默认是归档不删除 —— 工具清理掉的旧会话往往正是你想找回的。
   --fail-on-findings  audit: 有命中则退出码 1（CI 门禁）
   --no-index          不读写磁盘索引，用内存索引现建现查
   --terse             已无作用（默认就是精简格式），保留仅为兼容旧脚本
@@ -75,7 +78,7 @@ stdout 只放结果；命中总数、模糊放宽、去重折叠这些"工具自
 退出码: 0 命中 / 1 无命中 / 2 用法错误 / 3 语料不可读
 `;
 
-const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'verbose', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall', 'visible', 'list', 'regex', 'deep']);
+const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'verbose', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall', 'visible', 'list', 'regex', 'deep', 'gc']);
 const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'context', 'before', 'after', 'pattern', 'source', 'find', 'exclude']);
 
 /** 解析 argv → { positional, flags }。未知选项直接报错，避免静默忽略。 */
@@ -166,10 +169,27 @@ export function main(argv = process.argv.slice(2)) {
     return 0;
   }
 
+  // 会话目录不存在不一定是错误：agent 可能换了 home，或者工具把旧会话清空了。
+  // 这时只要索引里还有数据，命令就应当照常工作（search 走索引、show 有归档退路）。
+  // 只有「目录没有 且 索引也没有」才是真的没得可查。
   const root = sessionsRoot();
   if (!existsSync(root)) {
-    process.stderr.write(`cfind: 找不到会话目录 ${root}\n`);
-    return 3;
+    const probe = new DatabaseSync(indexPath(), { readOnly: true });
+    const known = (() => {
+      try {
+        return probe.prepare('SELECT COUNT(*) AS n FROM sessions').get().n ?? 0;
+      } catch {
+        return 0;
+      } finally {
+        probe.close();
+      }
+    })();
+    if (known === 0) {
+      process.stderr.write(`cfind: 找不到会话目录 ${root}\n`);
+      return 3;
+    }
+    // 有索引就继续；提醒一句，避免用户以为索引是最新的。
+    process.stderr.write(`cfind: 会话目录 ${root} 不存在，仅使用索引中的 ${known} 个会话\n`);
   }
 
   const [command, ...rest] = positional;
@@ -223,11 +243,23 @@ export function main(argv = process.argv.slice(2)) {
     }
 
     if (isCommand && command === 'index') {
+      // --gc：清掉已归档（原始文件已消失）的内容。归档让索引只增不减，
+      // 所以需要一条显式的回收路径 —— 但绝不自动执行。
+      if (flags.gc === true) {
+        const purged = purgeArchived(db);
+        process.stdout.write(
+          json
+            ? JSON.stringify(purged)
+            : `purged: ${purged.sessions} archived sessions, ${purged.docs} docs, ${purged.events} events\n`,
+        );
+        return 0;
+      }
       process.stdout.write(
         json
           ? JSON.stringify(synced)
           : `indexed: ${synced.sessions} sessions, ${synced.events} events, ${synced.docs} docs ` +
-              `(${synced.filesAppended} appended, ${synced.filesRebuilt} rebuilt, ${synced.filesSkipped} skipped) ` +
+              `(${synced.filesAppended} appended, ${synced.filesRebuilt} rebuilt, ${synced.filesSkipped} skipped` +
+              `${synced.archived ? `, ${synced.archived} archived` : ''}) ` +
               `in ${Math.round(synced.ms)}ms [${mode}]\n`,
       );
       return 0;

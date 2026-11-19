@@ -118,6 +118,23 @@ type Scope =
 
 token 是实打实的成本，与"熟不熟"无关，所以另有预算，不因"grep 同款"而豁免。
 
+### 归档策略（硬规则）
+
+原始会话文件消失时 **归档，不删除**：
+
+- `files.archived = 1`，`sessions` / `events` / `docs` 全部保留；
+- 文件重新出现时 upsert 会把 `archived` 清回 0（**归档必须可逆**）；
+- 会话目录整体不存在时，只要有索引就继续工作，只在 stderr 提醒（不许直接退出）；
+- `show` 在原始文件缺失时退到 `lib/context.mjs::windowFromIndex`，
+  返回 `archived: true`，并由 `showNotes()` 在 stderr 说明「蒸馏副本」。
+
+理由：agent 工具会定期清理旧会话，而「找回想不起来的对话」最依赖那些记录。
+删掉等于抹掉工具最该记住的部分。同类项目（sessionwiki 的 archive mode、
+cass 的 archive）都独立得出同一结论。
+
+代价是索引只增不减 → 必须提供 `cfind index --gc` 显式回收。
+**绝不自动执行**：磁盘上删掉文件 ≠ 用户想忘掉这段对话。
+
 ### show 的 L2/L3 一致性（硬规则）
 
 **`show` 的正文必须包含检索命中的那段内容。**

@@ -328,7 +328,10 @@ test('截断/重写：size 变小则清旧行后整文件重建', () => {
   }
 });
 
-test('消失文件：删除文件后清掉 files 行及孤儿会话', () => {
+test('消失文件：标记为 archived 而**不**删除（归档优先于清空）', () => {
+  // 为什么改成归档：agent 工具会定期清理旧会话，而「找回想不起来的对话」
+  // 最依赖的正是那些已经不在磁盘上的记录。删掉等于抹掉工具最该记住的部分。
+  // 实测同类项目的共识：sessionwiki 的 archive mode、cass 的 archive。
   const root = copyFixture();
   const db = freshDb();
   try {
@@ -337,22 +340,52 @@ test('消失文件：删除文件后清掉 files 行及孤儿会话', () => {
 
     const result = syncIndex(db, { root, only: ['dsh'] });
     assert.equal(result.filesScanned, 1);
-    assert.equal(result.filesRebuilt, 0);
-    assert.equal(result.filesAppended, 0);
     assert.deepEqual(result.errors, []);
+    assert.equal(result.archived, 1, '应当报告归档了 1 个文件');
 
-    assert.equal(db.prepare('SELECT COUNT(*) AS c FROM files').get().c, 1);
-    assert.equal(db.prepare('SELECT path FROM files').get().path, fileOf(root, B));
-    assert.equal(db.prepare('SELECT id FROM sessions').all().length, 1);
-    assert.equal(db.prepare('SELECT id FROM sessions').get().id, B);
-    assert.equal(count(db, 'SELECT COUNT(*) AS c FROM events WHERE session_id = ?', A), 0);
-    assert.equal(count(db, 'SELECT COUNT(*) AS c FROM docs WHERE session_id = ?', A), 0);
+    // files 行保留，只是打了 archived 标记
+    assert.equal(db.prepare('SELECT COUNT(*) AS c FROM files').get().c, 2);
+    assert.equal(
+      db.prepare('SELECT archived FROM files WHERE path = ?').get(fileOf(root, A)).archived,
+      1,
+    );
+    // 会话与正文都还在 —— 这是归档的意义
+    assert.equal(db.prepare('SELECT COUNT(*) AS c FROM sessions').get().c, 2);
+    assert.ok(count(db, 'SELECT COUNT(*) AS c FROM docs WHERE session_id = ?', A) > 0);
+    assert.ok(count(db, 'SELECT COUNT(*) AS c FROM events WHERE session_id = ?', A) > 0);
 
-    const totals = stats(db);
-    assert.equal(totals.sessions, 1);
-    assert.equal(totals.events, 10);
-    assert.equal(totals.docs, 8);
+    // 第二次 sync 不该重复归档（幂等）
+    const again = syncIndex(db, { root, only: ['dsh'] });
+    assert.equal(again.archived, undefined, '已归档的文件不该再被算作本次新归档');
   } finally {
+    db.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('文件恢复后自动解除归档（归档不是单向的）', () => {
+  const root = copyFixture();
+  const db = freshDb();
+  try {
+    syncIndex(db, { root, only: ['dsh'] });
+    const backup = join(root, 'backup-A');
+    cpSync(join(root, PROJECT, A), backup, { recursive: true });
+    rmSync(join(root, PROJECT, A), { recursive: true, force: true });
+    syncIndex(db, { root, only: ['dsh'] });
+    assert.equal(db.prepare('SELECT archived FROM files WHERE path = ?').get(fileOf(root, A))?.archived, 1);
+
+    // 工具恢复了会话（或用户从备份里搬回来）
+    cpSync(backup, join(root, PROJECT, A), { recursive: true });
+    rmSync(backup, { recursive: true, force: true });
+    syncIndex(db, { root, only: ['dsh'] });
+    // 重新读到文件时 archived 必须清掉，否则 show 会继续走"蒸馏副本"路径
+    assert.equal(
+      db.prepare('SELECT archived FROM files WHERE path = ?').get(fileOf(root, A))?.archived,
+      0,
+      '文件回来后应当解除归档',
+    );
+  } finally {
+    db.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
