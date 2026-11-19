@@ -56,6 +56,27 @@ $ cfind show 5b1626bf 86 --find descending
 
 想要带 kind/surface/标题的富格式就 `--verbose`。
 
+## 一个工具，九个 flag
+
+MCP 只暴露 **2 个工具、8 个参数**（实测接口税 **264 token**）：
+
+| 工具 | 参数 |
+|---|---|
+| `search` | `query` `all` `context` `surface` `limit` `list` |
+| `audit` | `all` `minSeverity` |
+
+工具数靠**换成 flag** 压下来，不是砍功能：
+
+| 原本是个工具 | 现在 | grep 对应 |
+|---|---|---|
+| `show`（取原文窗口） | `context: N` | `grep -C` |
+| `outline`（会话目录） | `list: true` | `grep -l` |
+| `index`（建索引） | 每次调用前自动同步 | — |
+| `stats` | 不需要（对检索没帮助） | — |
+
+`find` 这个参数也**消失了**：它原本只是替 `show` 补上「查询词」，
+折进 `search` 之后查询词本来就在手上，窗口自动居中 —— 参数凭空消失。
+
 两种形态，同一套内核：
 
 | 形态 | 入口 | 适用 |

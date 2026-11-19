@@ -26,10 +26,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { openDb } from '../lib/schema.mjs';
 import { indexPath, describeScope, selfSessionId } from '../lib/paths.mjs';
 import { syncIndex } from '../lib/store.mjs';
-import { search, show } from '../lib/query.mjs';
-import { outline } from '../lib/outline.mjs';
+import { search } from '../lib/query.mjs';
 import { audit, DEFAULT_PATTERNS } from '../lib/audit.mjs';
-import { renderHits, renderShow, renderOutline, renderAudit, showNotes } from '../lib/format.mjs';
+import { renderHits, renderAudit, hitNotes } from '../lib/format.mjs';
 import { readSessionFile } from '../lib/decode.mjs';
 
 const NAME = 'cfind';
@@ -109,114 +108,59 @@ function resolveSessionArg(target, arg) {
 }
 
 // ── 工具定义 ─────────────────────────────────────────────────────────────
+//
+// 设计准则：**尽量少的工具、尽量少的参数、尽量少的提示词**。
+// grep 只有一个命令，靠 flag 覆盖 `-r`(递归) `-C`(上下文) `-l`(只列文件)。
+// 这里照抄同一套：一个 search 工具 + 同样语义的 flag，再加一个 audit。
+//
+// 消掉的工具（不是功能消失，是换成了 grep 的 flag）：
+//   show    → `context: N`      （grep -C）
+//   outline → `list: true`      （grep -l）
+//   stats   → 不再需要（统计对一个 pattern 的检索没用）
+//   index   → 每次调用前本来就会自动增量同步，暴露出来只是让人误以为要手动维护
+//
+// 消掉的参数：session / project / includeReasoning / source / fuzzy / dedupe /
+//   excludeSelf / terse / maxChars / seq / before / after / find。
+//   find 尤其值得说：它原本只是替 show 补上「查询词」，折进 search 后
+//   查询词本来就在手上，窗口自动居中 —— 参数因此凭空消失。
+//
 // inputSchema 只用 DSH 强制支持的 JSON Schema 子集：
 // type / properties / required / additionalProperties / items / enum / const / description。
-const SCOPE_PROPS = {
-  session: { type: 'string', description: '限定单个会话 id（支持短前缀）。省略时默认「最近活跃的会话」，即调用方自己。' },
-  project: { type: 'string', description: '限定某个 cwd 的项目下所有会话。' },
-  all: { type: 'boolean', description: '搜全部会话（跨项目）。' },
-  excludeSelf: {
-    type: 'boolean',
-    description:
-      '排除调用方自己那个会话。用 --all 找「别的会话里的知识」时建议开启：' +
-      '否则你会搜到自己刚才敲的每条命令（本工具索引的正是会话历史，包含工具调用）。',
-  },
-};
-
 const TOOLS = [
   {
     name: 'search',
-    description:
-      '在 agent 会话历史里检索内容，返回命中列表与片段（L2 选择层，不给全文）。' +
-      '压缩过的历史同样可搜：DSH 的 /compact 只让模型看不见旧消息，原文仍在磁盘上。' +
-      '中文按 bigram 处理，2 字词（如「幂等」）也能命中。默认只搜调用方自己的会话。',
+    description: '搜 agent 会话历史。输出 `session:seq:text`，一行一条命中。压缩掉的历史也能搜。',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '要搜的词或短语，中文/英文都行。' },
-        ...SCOPE_PROPS,
-        limit: { type: 'number', description: '命中条数上限，默认 10。' },
+        query: { type: 'string', description: '要搜的词，中文/英文都行。' },
+        all: { type: 'boolean', description: '搜全部会话。默认只搜当前会话。' },
+        context: { type: 'number', description: '每条命中前后各取 N 条事件（grep -C）。不给只看命中行。' },
         surface: {
           type: 'string',
-          description:
-            'all（默认）| current（模型仍看得见）| shadowed（已被压缩掉、你看不见）。\n' +
-            '**想不起早先的指令/决定时用 shadowed**：压缩后你看得见的内容本来就在上下文里，' +
-            '真正想不起来的恰好是被压掉的那一半。',
+          description: 'shadowed = 只搜已被压缩掉、彼此看不见的部分。想不起早先的指令/决定时用它。',
           enum: ['all', 'current', 'shadowed'],
         },
-        includeReasoning: { type: 'boolean', description: '是否包含模型的 reasoning（默认 true，权重最低）。' },
-        source: { type: 'string', description: '限定来源，逗号分隔（dsh,claude,codex,opencode）。默认全部。' },
-        fuzzy: { type: 'boolean', description: '默认 true：精确命中为 0 时依次尝试前缀/拼写纠错/OR 放宽。' },
-        dedupe: { type: 'boolean', description: '默认 true：折叠同会话内近似重复的命中（折叠数会显示出来）。' },
+        limit: { type: 'number', description: '最多几条命中，默认 10。' },
+        list: { type: 'boolean', description: '只列提及它的会话（grep -l），不返回命中正文。' },
       },
       required: ['query'],
     },
   },
   {
-    name: 'show',
-    description:
-      '取某条事件的原文窗口（L3 全文层）。search 的 hit 里带 seq，用它来取全文。' +
-      '已被压缩（shadowed）的内容同样能取回。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        session: { type: 'string', description: '会话 id（支持短前缀）。' },
-        seq: { type: 'number', description: '事件序号，来自 search 结果里的 #seq。' },
-        before: { type: 'number', description: '目标之前取几条，默认 3。' },
-        after: { type: 'number', description: '目标之后取几条，默认 3。' },
-        find: {
-          type: 'string',
-          description:
-            '把显示窗口**居中到这个词**（通常就传你刚搜的那个词）。' +
-            '一条事件可能有几万字符，命中在其中第 6 万字符处；不给 find 就只看得到开头。' +
-            '也会显示被普通渲染省略的部分（如 reasoning 块）。',
-        },
-      },
-      required: ['session', 'seq'],
-    },
-  },
-  {
-    name: 'outline',
-    description:
-      '会话摘要（L1 摘要层）：标题 + 每个回合一行（首问 + 末答）+ 压缩检查点。\n' +
-      '**什么时候别用**：已经知道要搜什么词就直接用 search —— 实测 search（约 190 token）' +
-      '比 outline --all（约 1050 token）便宜 5 倍，且在多数问题上直接给答案。' +
-      '只有当你完全不知道该翻哪个会话、需要先看目录时，才先用 outline。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ...SCOPE_PROPS,
-        maxChars: { type: 'number', description: '输出字符预算，默认 3000。' },
-      },
-    },
-  },
-  {
     name: 'audit',
-    description:
-      '隐私/涉密扫描：在会话历史里找 API key、私钥、Bearer token、赋值型口令等，输出**强制脱敏**（前 4 + 后 2 + 长度）。' +
-      '用于检查「会话记录里有没有泄露凭据」。',
+    description: '扫描会话里的凭据泄露（API key、私钥、Bearer、口令赋值）。输出**强制脱敏**。',
     inputSchema: {
       type: 'object',
       properties: {
-        ...SCOPE_PROPS,
+        all: { type: 'boolean', description: '扫全部会话。默认只扫当前会话。' },
         minSeverity: {
           type: 'string',
-          description: 'high（默认，固定前缀类高精度）| medium | low | all（含熵启发式，误报高）。',
-          enum: ['high', 'medium', 'low', 'all'],
+          description: 'high（默认）| low | all。low 含熵启发式，误报多。',
+          enum: ['high', 'low', 'all'],
         },
-        limit: { type: 'number', description: 'findings 上限，默认 50。' },
       },
     },
-  },
-  {
-    name: 'stats',
-    description: '索引统计：会话数、事件数、可检索文档数、索引体积。',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'index',
-    description: '手动触发索引增量更新（正常情况下每次查询前会自动做，不需要主动调用）。',
-    inputSchema: { type: 'object', properties: {} },
   },
 ];
 
@@ -225,84 +169,51 @@ const text = (value) => ({ content: [{ type: 'text', text: value }] });
 // ── 工具实现 ─────────────────────────────────────────────────────────────
 function callTool(name, args) {
   const target = getDb();
-  const only = typeof args.source === 'string' ? args.source.split(',').map((id) => id.trim()).filter(Boolean) : undefined;
-  const synced = sync(only);
+  // 每次调用前自动增量同步：index 工具因此不需要存在。
+  sync();
 
   switch (name) {
     case 'search': {
       const query = String(args.query ?? '').trim();
       if (!query) throw new Error('query 不能为空');
       const scope = scopeOf(args, target);
+      const limit = Number.isFinite(Number(args.limit)) ? Number(args.limit) : 10;
+
+      // list = grep -l：只回答「哪些会话提到了它」。
+      // 内部多取一些再按会话去重，否则 limit=10 会让人以为世界上只有 10 条。
+      if (args.list === true) {
+        const scan = search(target, { query, scope, limit: Math.min(500, Math.max(limit, 100) * 5), context: 0 });
+        const seen = new Map();
+        for (const hit of scan.hits) if (!seen.has(hit.sessionId)) seen.set(hit.sessionId, hit);
+        if (seen.size === 0) return text('(no hits)');
+        const lines = [...seen.values()].map((hit) => (hit.title ? `${hit.short}:${hit.title}` : hit.short));
+        return text(`${lines.join('\n')}\n(${seen.size} sessions of ${scan.total} hits)`);
+      }
+
+      const context = Number.isFinite(Number(args.context)) ? Number(args.context) : 0;
       const result = search(target, {
         query,
         scope,
-        limit: Number.isFinite(Number(args.limit)) ? Number(args.limit) : 10,
-        includeReasoning: args.includeReasoning !== false,
+        limit,
+        context,
         surface: typeof args.surface === 'string' ? args.surface : 'all',
-        fuzzy: args.fuzzy !== false,
-        dedupe: args.dedupe !== false,
       });
-      const body = renderHits(result, {
-        json: false,
-        maxChars: 2000,
-        scope: describeScope(scope),
-        terse: args.terse === true,
-      });
-      // 无命中要明确说出来，否则 agent 容易反复重试同一个词。
-      const suffix =
-        result.total === 0
-          ? '\n\n（没有命中，模糊放宽也没救回来。可换更短的关键词，或缩小 scope 到某个会话。）'
-          : '';
+      const body = renderHits(result, { json: false, maxChars: 2000, scope: describeScope(scope) });
+      const notes = hitNotes(result);
+      // 无命中时 renderHits 已经给了 `(no hits)`，不要再补一遍；
+      // 只在「有命中、但被放宽/折叠过」时追加说明。
+      const suffix = result.total === 0 ? '' : notes.length > 0 ? `\n(${notes.join(' · ')})` : '';
       return text(body + suffix);
-    }
-    case 'show': {
-      const sessionId = resolveSessionArg(target, args.session);
-      const find = typeof args.find === 'string' && args.find.trim() ? args.find.trim() : undefined;
-      const shown = show(target, {
-        sessionId,
-        seq: Number(args.seq),
-        before: Number.isFinite(Number(args.before)) ? Number(args.before) : 3,
-        after: Number.isFinite(Number(args.after)) ? Number(args.after) : 3,
-        find,
-      });
-      const body = renderShow(shown, { json: false, maxChars: 4000, find });
-      const notes = showNotes(shown, { find });
-      return text(notes.length > 0 ? `${body}\n(${notes.join(' · ')})` : body);
-    }
-    case 'outline': {
-      const scope = scopeOf(args, target);
-      const result = outline(target, { scope });
-      return text(
-        renderOutline(result, {
-          json: false,
-          maxChars: Number.isFinite(Number(args.maxChars)) ? Number(args.maxChars) : 3000,
-          scope: describeScope(scope),
-          terse: args.terse === true,
-        }),
-      );
     }
     case 'audit': {
       const scope = scopeOf(args, target);
       const result = audit(target, {
         patterns: DEFAULT_PATTERNS,
         scope,
-        limit: Number.isFinite(Number(args.limit)) ? Number(args.limit) : 50,
+        limit: 50,
         minSeverity: typeof args.minSeverity === 'string' ? args.minSeverity : 'high',
       });
       return text(renderAudit(result, { json: false, scope: describeScope(scope) }));
-    }
-    case 'stats': {
-      const sessions = target.prepare('SELECT COUNT(*) AS n FROM sessions').get()?.n ?? 0;
-      const events = target.prepare('SELECT COUNT(*) AS n FROM events').get()?.n ?? 0;
-      const docs = target.prepare('SELECT COUNT(*) AS n FROM docs').get()?.n ?? 0;
-      return text(`index: ${sessions} sessions · ${events} events · ${docs} docs`);
-    }
-    case 'index': {
-      return text(
-        `synced: ${synced.sessions ?? 0} sessions · ${synced.events ?? 0} events · ` +
-          `${synced.docs ?? 0} docs（appended ${synced.filesAppended ?? 0} / rebuilt ${synced.filesRebuilt ?? 0} / ` +
-          `skipped ${synced.filesSkipped ?? 0}）`,
-      );
     }
     default:
       throw new Error(`unknown tool: ${name}`);

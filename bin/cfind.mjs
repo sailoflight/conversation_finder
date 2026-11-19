@@ -44,6 +44,8 @@ const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude 
   --verbose           富格式：加 scope 首行、kind/surface、会话标题（人读更舒服）
   --surface <s>       all | current | shadowed（默认 all）
   --recall            等价 --surface shadowed：只搜「已被压缩掉、你看不见」的部分
+  --context <n>       每条命中前后各取 N 条事件（grep -C）
+  --list              只列提及它的会话（grep -l），不返回命中正文
   --exclude-self      排除当前正在写入的会话（即你自己）
   --source <list>     只扫这些来源，逗号分隔（dsh,claude,codex,opencode）
   --no-reasoning      排除 reasoning 文档（默认包含，权重最低）
@@ -65,8 +67,8 @@ stdout 只放结果；命中总数、模糊放宽、去重折叠这些"工具自
 退出码: 0 命中 / 1 无命中 / 2 用法错误 / 3 语料不可读
 `;
 
-const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'verbose', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall']);
-const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'before', 'after', 'pattern', 'min-severity', 'source', 'find']);
+const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'verbose', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall', 'list']);
+const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'context', 'before', 'after', 'pattern', 'min-severity', 'source', 'find']);
 
 /** 解析 argv → { positional, flags }。未知选项直接报错，避免静默忽略。 */
 export function parseArgs(argv) {
@@ -270,6 +272,8 @@ export function main(argv = process.argv.slice(2)) {
     // 默认：检索。命令词不是保留字时，整个 positional 都算 query。
     const query = (isCommand ? rest : positional).join(' ').trim();
     if (!query) throw new UsageError('用法: cfind <query> [选项]');
+    const wantList = flags.list === true;
+    const context = num(flags.context, 0);
     const result = search(db, {
       query,
       scope: scopeFinal,
@@ -278,7 +282,24 @@ export function main(argv = process.argv.slice(2)) {
       limit: num(flags.limit, 10),
       includeReasoning: flags['no-reasoning'] !== true,
       surface: surface ?? 'all',
+      context: wantList ? 0 : context,
     });
+
+    // --list = grep -l：只回「哪些会话提到了它」。内部多取一些再按会话去重，
+    // 否则 limit=10 会让人以为世界上只有 10 条。
+    if (wantList) {
+      const scan = search(db, {
+        query,
+        scope: scopeFinal,
+        limit: Math.min(500, Math.max(num(flags.limit, 10), 100) * 5),
+      });
+      const seen = new Map();
+      for (const hit of scan.hits) if (!seen.has(hit.sessionId)) seen.set(hit.sessionId, hit);
+      const lines = [...seen.values()].map((hit) => (hit.title ? `${hit.short}:${hit.title}` : hit.short));
+      process.stdout.write(lines.length > 0 ? `${lines.join('\n')}\n` : '(no hits)\n');
+      if (!json && seen.size > 0) process.stderr.write(`(${seen.size} sessions of ${scan.total} hits)\n`);
+      return scan.total > 0 ? 0 : 1;
+    }
     const count = result.total;
     const rendered = renderHits({ ...result, query }, {
       json,

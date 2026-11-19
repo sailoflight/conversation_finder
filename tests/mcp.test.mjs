@@ -124,14 +124,25 @@ test('MCP: server/discover 明确拒绝（触发 client 的 legacy 回落）', a
   }
 });
 
-test('MCP: tools/list 暴露六个工具且 schema 在 DSH 支持的子集内', async () => {
+test('MCP: 只暴露 2 个工具、8 个参数（尽量少的接口税）', async () => {
   const home = makeHome();
   const client = connect(home);
   try {
     await client.request('initialize', initParams);
     const response = await client.request('tools/list', {});
     const names = response.result.tools.map((tool) => tool.name).sort();
-    assert.deepEqual(names, ['audit', 'index', 'outline', 'search', 'show', 'stats']);
+    assert.deepEqual(names, ['audit', 'search']);
+    // 接口税是实打实的成本：工具定义本身就要占上下文，且每次会话都要付。
+    // 这里把「参数总量」也钉住 —— 加参数得有很硬的理由。
+    const params = response.result.tools.reduce(
+      (sum, tool) => sum + Object.keys(tool.inputSchema.properties ?? {}).length,
+      0,
+    );
+    assert.equal(params, 8, `参数总数应保持 8，实际 ${params}`);
+    // show / outline / stats / index 都已被 grep 式 flag 取代，不该再单独出现
+    for (const gone of ['show', 'outline', 'stats', 'index']) {
+      assert.ok(!names.includes(gone), `${gone} 应该被 context/list/自动同步取代`);
+    }
     for (const tool of response.result.tools) {
       assert.equal(tool.inputSchema.type, 'object');
       // DSH 的 assertSupportedJsonSchema 不接受 $schema / format / minimum 等关键字。
@@ -176,23 +187,27 @@ test('MCP: search 无命中时明确告知（避免 agent 反复重试）', asyn
       name: 'search',
       arguments: { query: 'qwzznonexistentterm', all: true },
     });
-    assert.match(response.result.content[0].text, /没有命中/);
+    assert.match(response.result.content[0].text, /no hits/);
   } finally {
     client.close();
     rmSync(home, { recursive: true, force: true });
   }
 });
 
-test('MCP: show 能取回 shadowed 事件原文', async () => {
+test('MCP: 已被压缩（shadowed）的内容仍能取回正文', async () => {
   const home = makeHome();
   const client = connect(home);
   try {
     await client.request('initialize', initParams);
+    // 旧接口是 show(session, seq)。现在 fold 成 search + context：
+    // 搜那个词、带上上下文，被压缩的内容同样出现在结果里。
     const response = await client.request('tools/call', {
-      name: 'show',
-      arguments: { session: SESSION_IDS.B, seq: 5 },
+      name: 'search',
+      arguments: { query: 'settlement_id', all: true, list: false, context: 1 },
     });
     assert.match(response.result.content[0].text, /settlement_id/);
+    // 命中行或上下文行都应出现（: 或 - 分隔）
+    assert.match(response.result.content[0].text, /^\w+[:-]\d+[:-]/m);
   } finally {
     client.close();
     rmSync(home, { recursive: true, force: true });
@@ -204,32 +219,44 @@ test('MCP: 工具级错误用 isError 返回而不是断连', async () => {
   const client = connect(home);
   try {
     await client.request('initialize', initParams);
-    const response = await client.request('tools/call', {
-      name: 'show',
-      arguments: { session: 'no-such-session', seq: 1 },
-    });
+    // 空 query 是唯一的参数错误路径（其余都由默认值兜住）。
+    const response = await client.request('tools/call', { name: 'search', arguments: { query: '  ' } });
     assert.equal(response.result.isError, true);
-    assert.match(response.result.content[0].text, /找不到会话/);
+    assert.match(response.result.content[0].text, /query/);
     // 连接仍然可用：再调一次正常工具
-    const after = await client.request('tools/call', { name: 'stats', arguments: {} });
-    assert.match(after.result.content[0].text, /sessions/);
+    const after = await client.request('tools/call', { name: 'search', arguments: { query: '幂等键', all: true } });
+    // grep 形状：session:seq:text（短 id 含字母，不能只匹配数字）
+    assert.match(after.result.content[0].text, /^\w+:\d+:/m);
   } finally {
     client.close();
     rmSync(home, { recursive: true, force: true });
   }
 });
 
-test('MCP: stats / index / outline / audit 都能返回', async () => {
+test('MCP: context 代替 show，list 代替 outline', async () => {
   const home = makeHome();
   const client = connect(home);
   try {
     await client.request('initialize', initParams);
-    const stats = await client.request('tools/call', { name: 'stats', arguments: {} });
-    assert.match(stats.result.content[0].text, /sessions/);
-    const indexed = await client.request('tools/call', { name: 'index', arguments: {} });
-    assert.match(indexed.result.content[0].text, /synced/);
-    const tree = await client.request('tools/call', { name: 'outline', arguments: { all: true } });
-    assert.match(tree.result.content[0].text, /幂等键与重复扣款排查|订阅计费与退款对账/);
+
+    // context：命中行用 `:`、上下文行用 `-`（grep -C 形状）
+    const withContext = await client.request('tools/call', {
+      name: 'search',
+      arguments: { query: '幂等键', all: true, context: 2 },
+    });
+    const contextText = withContext.result.content[0].text;
+    assert.match(contextText, /^\w+[:-]\d+[:-]/m, '应当出现 grep -C 形状的行');
+    assert.ok(contextText.split('\n').length >= 3, 'context>0 时应当多于一条命中行');
+
+    // list：只回「哪些会话」，每行 session:标题
+    const listed = await client.request('tools/call', {
+      name: 'search',
+      arguments: { query: '幂等键', all: true, list: true },
+    });
+    const listText = listed.result.content[0].text;
+    assert.match(listText, /^\w+:\S/m, 'list 应当输出 session:标题');
+
+    // audit 仍然独立存在（它的输出强制脱敏，不能折进 search）
     const found = await client.request('tools/call', { name: 'audit', arguments: { all: true } });
     assert.match(found.result.content[0].text, /audit/);
   } finally {
@@ -293,6 +320,35 @@ test('MCP(真实 SDK): DSH 的 client 能完成版本协商并调用工具', { s
     assert.match(body, /settlement_id/);
   } finally {
     await client?.close?.();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('MCP: 接口税不超标（工具数 / 参数量 / 描述长度都钉住）', async () => {
+  const home = makeHome();
+  const client = connect(home);
+  try {
+    await client.request('initialize', initParams);
+    const { result } = await client.request('tools/list', {});
+    const tools = result.tools;
+
+    // 这三个数字是「尽量少的工具、尽量少的参数、尽量少的提示词」的量化形式。
+    // 想加东西就得先改这里的断言 —— 那是一次有意识的决定，不是顺手膨胀。
+    assert.ok(tools.length <= 2, `工具数应 <=2，实际 ${tools.length}`);
+    const params = tools.reduce((sum, tool) => sum + Object.keys(tool.inputSchema.properties ?? {}).length, 0);
+    assert.ok(params <= 8, `参数总数应 <=8，实际 ${params}`);
+
+    // 粗粒度 token 估算：CJK/1.5 + ASCII/4
+    const cjk = (text) => (String(text).match(/[\u4e00-\u9fff]/g) ?? []).length;
+    const approx = (text) => Math.round(cjk(text) / 1.5 + (String(text).length - cjk(text)) / 4);
+    const tax = tools.reduce(
+      (sum, tool) => sum + approx(tool.description ?? '') + approx(JSON.stringify(tool.inputSchema)),
+      0,
+    );
+    // 实测 264 tok。给 1.5 倍余量以免因措辞微调就挂，但能挡住"再加个工具"。
+    assert.ok(tax <= 400, `接口税 ${tax} tok 超预算（<=400）`);
+  } finally {
+    client.close();
     rmSync(home, { recursive: true, force: true });
   }
 });

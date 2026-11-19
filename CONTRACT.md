@@ -84,6 +84,22 @@ type Scope =
 - 富格式（kind/surface/标题/截断后缀）只在 `verbose: true` 时出现。
 - 输出必须以换行结尾（否则 `| wc -l` 少数一行）。
 
+### MCP 接口预算（硬规则）
+
+**2 个工具、8 个参数、接口税 ≤ 400 tok。**
+
+工具定义是要付租金的：每次会话、每个 agent 都要把 schema 读进上下文。
+实测从 6 工具 / 27 参数 / 1138 tok 压到 2 / 8 / 264 tok。
+
+- `show` → `context: N`（grep -C）
+- `outline` → `list: true`（grep -l）
+- `index` → 每次调用前自动增量同步
+- `stats` → 删除
+- 富格式、`--find`、`--source`、`--exclude-self` 等只留在 CLI（人用），不进 MCP
+
+`tests/mcp.test.mjs` 里有断言钉住这三个数字。想加东西必须先改那个断言 ——
+让膨胀成为一次有意识的决定。
+
 ### show 的 L2/L3 一致性（硬规则）
 
 **`show` 的正文必须包含检索命中的那段内容。**
