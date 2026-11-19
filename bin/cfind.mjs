@@ -42,7 +42,8 @@ const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude 
   --max-chars <n>     输出字符预算（默认 1500）
   --json              机器可读输出（完整字段，含 title/kind/surface/score）
   --verbose           富格式：加 scope 首行、kind/surface、会话标题（人读更舒服）
-  --surface <s>       all | current | shadowed（默认 all）
+  --surface <s>       current（默认，压缩后）| shadowed（压缩前）| all
+                      默认排除上一次压缩之前的内容
   --recall            等价 --surface shadowed：只搜「已被压缩掉、你看不见」的部分
   --context <n>       每条命中前后各取 N 条事件（grep -C）
   --list              只列提及它的会话（grep -l），不返回命中正文
@@ -182,7 +183,14 @@ export function main(argv = process.argv.slice(2)) {
     const terse = flags.terse === true;
     // --recall 是 --surface shadowed 的语义化别名。显式 --surface 优先，
     // 否则 --recall 会静默覆盖用户明确写的值。
-    const surface = flags.recall === true ? (typeof flags.surface === 'string' ? flags.surface : 'shadowed') : flags.surface;
+    // 默认「排除上一次压缩之前」= 只搜压缩之后（current）。
+    // 显式 --surface 始终优先，--recall 是它的行为化快捷方式。
+    const surface =
+      typeof flags.surface === 'string'
+        ? flags.surface
+        : flags.recall === true
+          ? 'shadowed'
+          : 'current';
 
     // 作用域收窄必须在 sync 之后算：selfSessionId 依赖 files 表里刚刷新的 mtime。
     // 早算会用到上一轮的 mtime，排除的可能是「上一次」正在写的会话（曾经写反过顺序）。
@@ -281,7 +289,7 @@ export function main(argv = process.argv.slice(2)) {
       fuzzy: flags['no-fuzzy'] !== true,
       limit: num(flags.limit, 10),
       includeReasoning: flags['no-reasoning'] !== true,
-      surface: surface ?? 'all',
+      surface,
       context: wantList ? 0 : context,
     });
 

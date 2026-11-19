@@ -136,11 +136,7 @@ const TOOLS = [
         query: { type: 'string', description: '要搜的词，中文/英文都行。' },
         all: { type: 'boolean', description: '搜全部会话。默认只搜当前会话。' },
         context: { type: 'number', description: '每条命中前后各取 N 条事件（grep -C）。不给只看命中行。' },
-        surface: {
-          type: 'string',
-          description: 'shadowed = 只搜已被压缩掉、彼此看不见的部分。想不起早先的指令/决定时用它。',
-          enum: ['all', 'current', 'shadowed'],
-        },
+        recall: { type: 'boolean', description: '想不起早先的指令/决定时置 true：只搜已被压缩掉、你看不见的部分。' },
         limit: { type: 'number', description: '最多几条命中，默认 10。' },
         list: { type: 'boolean', description: '只列提及它的会话（grep -l），不返回命中正文。' },
       },
@@ -191,12 +187,15 @@ function callTool(name, args) {
       }
 
       const context = Number.isFinite(Number(args.context)) ? Number(args.context) : 0;
+      // surface 的默认值：排除上一次压缩**之前**的内容（只搜压缩之后）。
+      // 这是「agent 已经看得见的部分」——想找它们直接用上下文，不必检索。
+      // recall=true 是它的行为化反面：那半边恰恰是看不见的。
       const result = search(target, {
         query,
         scope,
         limit,
         context,
-        surface: typeof args.surface === 'string' ? args.surface : 'all',
+        surface: args.recall === true ? 'shadowed' : 'current',
       });
       const body = renderHits(result, { json: false, maxChars: 2000, scope: describeScope(scope) });
       const notes = hitNotes(result);

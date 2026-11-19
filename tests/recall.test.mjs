@@ -110,3 +110,22 @@ test('没有压缩过的会话：召回为空且不应崩', () => {
   assert.equal(recalled.total, 0);
   assert.deepEqual(recalled.hits, []);
 });
+
+test('默认排除上一次压缩之前（CLI/MCP 的默认值是 current）', () => {
+  // 语义：把压缩前的内容当成"归档日志"。grep 搜现存文件，要搜归档得显式说 ——
+  // 这条默认就是照这个直觉定的。
+  // 断言放在 CLI 与 MCP 的默认解析上（query 层本身仍允许 'all'）。
+  const db = makeDb();
+
+  // 压缩前的 #1 在默认视角下不该出现
+  const asDefault = search(db, { query: '最初指令', scope, limit: 10, surface: 'current' });
+  assert.equal(asDefault.total, 0, '默认（current）看不到压缩前的指令');
+
+  // 想找它必须显式 recall
+  const asRecall = search(db, { query: '最初指令', scope, limit: 10, surface: 'shadowed' });
+  assert.ok(asRecall.total > 0, 'recall 才能看到压缩前的指令');
+
+  // 两者相加恰好是全部（保证默认没有"多丢"）
+  const asAll = search(db, { query: '最初指令', scope, limit: 10, surface: 'all' });
+  assert.equal(asAll.total, asDefault.total + asRecall.total);
+});

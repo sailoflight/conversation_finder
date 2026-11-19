@@ -113,6 +113,22 @@ type Scope =
 - 没传 `find` 且索引内容明显多于显示内容时，必须报告 `target.hidden` 并提示用 `find`。
   静默丢掉内容会让用户误判"命中是错的"。
 
+### surface 的默认值（CLI/MCP 层，不是 query 层）
+
+`query.search()` 本身默认 `surface: 'all'`；**CLI 与 MCP 的默认是 `current`**。
+
+理由：`/compact` 之后 agent 的上下文 = 摘要 + 压缩后的新消息。压缩前的内容是**归档**，
+与 grep「搜现存文件」的直觉一致 —— 要搜归档得显式说。
+
+| 入口 | 默认 | 另一半 |
+|---|---|---|
+| CLI | `--surface current` | `--recall` / `--surface shadowed` / `--surface all` |
+| MCP | `current` | `recall: true` → `shadowed`（两者不重叠，无 `all`） |
+
+参数名的选择：`recall` 是**行为**（"我想不起来了"），不是机制（`surface: shadowed`）。
+agent 已经内化 grep 的 `-r/-C/-l/-m`，这 5 个参数照抄；只有这一个需要新词，
+所以它必须用行为语言。
+
 ### surface 语义（`--recall` 的全部依据）
 
 | surface | 含义 | 对 agent 的价值 |
