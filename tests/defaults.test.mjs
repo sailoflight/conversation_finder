@@ -19,6 +19,14 @@ import { openDb } from '../lib/schema.mjs';
 import { search, resolveExclude } from '../lib/query.mjs';
 import { defaultSurface } from '../lib/paths.mjs';
 import { bigrams } from '../lib/cjk.mjs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const MINE = 'sess-mine-1111';
 const OTHER = 'sess-other-2222';
@@ -145,4 +153,18 @@ test('exclude 与 surface 可以叠加', () => {
     exclude: 'user',
   });
   assert.equal(excluded.total, 0);
+});
+
+test('CLI: --exclude 写错时干净报错、退出码 2、不吐堆栈', () => {
+  // grep 不会因为 glob 写错就打印 C 栈帧。参数错误只该给人话 ——
+  // 而且必须是**报错**而不是静默忽略：否则用户以为排除了，其实没排除。
+  const result = spawnSync(process.execPath, ['--no-warnings', 'bin/cfind.mjs', 'x', '--exclude', 'nope'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: { ...process.env, CFIND_HOME: mkdtempSync(join(tmpdir(), 'cfind-excl-')) },
+  });
+  assert.equal(result.status, 2, '用法错误退出码应为 2');
+  assert.match(result.stderr, /未知的排除区域/);
+  assert.ok(!result.stderr.includes('at resolveExclude'), '不该打印堆栈');
+  assert.ok(!result.stderr.includes('node:internal'), '不该打印堆栈');
 });

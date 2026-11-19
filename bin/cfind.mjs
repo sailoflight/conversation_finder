@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs';
 import { openDb } from '../lib/schema.mjs';
 import { indexPath, sessionsRoot, listSessionFiles, resolveScope, describeScope, shortId, selfSessionId, defaultSurface } from '../lib/paths.mjs';
 import { syncIndex, stats } from '../lib/store.mjs';
-import { search, show, resolveSessionIds } from '../lib/query.mjs';
+import { search, show, resolveSessionIds, resolveExclude } from '../lib/query.mjs';
 import { outline } from '../lib/outline.mjs';
 import { audit, DEFAULT_PATTERNS } from '../lib/audit.mjs';
 import { renderHits, renderShow, renderOutline, renderAudit, renderStats, hitNotes, showNotes } from '../lib/format.mjs';
@@ -288,6 +288,12 @@ export function main(argv = process.argv.slice(2)) {
     if (!query) throw new UsageError('用法: cfind <query> [选项]');
     const wantList = flags.list === true;
     const context = num(flags.context, 0);
+    // --exclude 的取值错误属于用法问题，要给人话而不是堆栈。
+    try {
+      resolveExclude(flags.exclude);
+    } catch (error) {
+      throw new UsageError(error.message);
+    }
     const result = search(db, {
       query,
       scope: scopeFinal,
@@ -341,7 +347,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   try {
     process.exitCode = main();
   } catch (error) {
-    if (error instanceof UsageError) {
+    // 参数类错误（--exclude 写错区域、未知选项…）只给人话，不吐堆栈：
+    // grep 也不会因为 glob 写错就打印 C 的栈帧。
+    if (error instanceof UsageError || error?.userFacing === true) {
       process.stderr.write(`cfind: ${error.message}\n`);
       process.exitCode = 2;
     } else {
