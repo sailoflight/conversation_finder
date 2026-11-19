@@ -128,47 +128,48 @@ function resolveSessionArg(target, arg) {
 // type / properties / required / additionalProperties / items / enum / const / description。
 const TOOLS = [
   {
+    // description 是**唯一**能让 agent 知道"结果可不可信"的地方，所以它优先说保证，
+    // 而不是说功能。这条保证改变了 agent 的推理方式：命中即可作为证据。
     name: 'search',
-    description: '搜 agent 会话历史。输出 `session:seq:text`，一行一条命中。压缩掉的历史也能搜。',
+    description:
+      '搜 agent 会话历史，输出 `session:seq:text`。**每条命中都真的含你搜的词**（严格字面，不做近义替换）；压缩掉的历史也能搜，含你看不见的那部分。',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '要搜的词，中文/英文都行。' },
-        all: { type: 'boolean', description: '搜全部会话。默认只搜当前会话。' },
-        context: { type: 'number', description: '每条命中前后各取 N 条事件（grep -C）。不给只看命中行。' },
+        query: { type: 'string', description: '要搜的词或短语，中文英文皆可。' },
+        all: { type: 'boolean', description: '全部会话（grep -r）。默认只当前会话。' },
+        context: { type: 'number', description: '每条命中前后各取 N 条事件（grep -C）。' },
         exclude: {
           type: 'array',
           items: {
             type: 'string',
             enum: ['tool', 'reasoning', 'assistant', 'user', 'title', 'system', 'compaction'],
           },
-          description: '排除区域。tool = 工具调用+输出（实测占六成以上，噪音大时排掉）；reasoning = 思考过程。',
+          description: '排除区域：tool=工具调用+输出（噪音最大）、reasoning=思考过程。',
         },
-        regex: {
-          type: 'boolean',
-          description: '把 query 当正则（grep 同款）。默认走关键词索引，支持中文与模糊纠错；正则走全表扫描，较慢且有超时保护。',
-        },
-        limit: { type: 'number', description: '最多几条命中，默认 10。' },
-        list: { type: 'boolean', description: '只列提及它的会话（grep -l），不返回命中正文。' },
+        regex: { type: 'boolean', description: '把 query 当正则（较慢，走全表扫描）。' },
+        limit: { type: 'number', description: '命中上限，默认 10。' },
+        list: { type: 'boolean', description: '只列会话，不返回正文（grep -l）。' },
       },
       required: ['query'],
     },
   },
   {
     name: 'audit',
-    description: '扫描会话里的凭据泄露（API key、私钥、Bearer、口令赋值）。输出**强制脱敏**。',
+    description: '扫会话里的凭据泄露（API key、私钥、Bearer、口令赋值），输出强制脱敏。',
     inputSchema: {
       type: 'object',
       properties: {
         all: { type: 'boolean', description: '扫全部会话。默认只扫当前会话。' },
         deep: {
           type: 'boolean',
-          description: '深扫：连"高熵字符串"启发式一起查，能抓到没有固定前缀的凭据，但会把 sha256/随机 id 也算进来（实测多出 3 倍噪音）。',
+          description: '连高熵启发式一起扫：能抓无固定前缀的凭据，但 sha256 与随机 id 会误报。',
         },
       },
     },
   },
 ];
+
 
 const text = (value) => ({ content: [{ type: 'text', text: value }] });
 

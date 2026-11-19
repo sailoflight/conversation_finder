@@ -429,3 +429,42 @@ test('MCP: regex 参数存在且能跑（表达式检索）', async () => {
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('MCP: search 的描述必须声明「严格字面」保证', async () => {
+  // 这是 agent 判断「结果能不能当证据」的唯一来源。
+  // 默认严格（不做近义替换）是我们的地基；描述里丢掉这句话，
+  // agent 就无从知道命中含金量，可能仍按"模糊搜索"的心态使用。
+  const home = makeHome();
+  const client = connect(home);
+  try {
+    await client.request('initialize', initParams);
+    const { result } = await client.request('tools/list', {});
+    const search = result.tools.find((tool) => tool.name === 'search');
+    assert.match(search.description, /每条命中都真的含/, '描述里必须写明严格字面保证');
+    // 不能反过来吹"模糊/智能"，那与默认行为矛盾
+    assert.doesNotMatch(search.description, /模糊|纠错|近义词?搜索/, '默认不做模糊，描述不该暗示');
+  } finally {
+    client.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('MCP: 描述里不该出现已移除/已过时的说法', async () => {
+  const home = makeHome();
+  const client = connect(home);
+  try {
+    await client.request('initialize', initParams);
+    const { result } = await client.request('tools/list', {});
+    const regexProp = result.tools.find((t) => t.name === 'search').inputSchema.properties.regex;
+    // 这条描述曾经写着"支持中文与模糊纠错"，但模糊现在默认关闭，必须改掉。
+    assert.doesNotMatch(regexProp.description, /模糊纠错/, 'regex 的描述不能仍宣称模糊纠错');
+    // surface 相关参数已经从 MCP 移除，不该以任何形式回潮
+    const allProps = result.tools.flatMap((t) => Object.keys(t.inputSchema.properties ?? {}));
+    for (const gone of ['surface', 'recall', 'synonym', 'fuzzy', 'find', 'session', 'project']) {
+      assert.ok(!allProps.includes(gone), `${gone} 不该出现在 MCP 参数里`);
+    }
+  } finally {
+    client.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});

@@ -293,7 +293,7 @@ aaaaaaaa:1:先调研一个会话检索工具，要求能找回被压缩掉的历
 
 | | 我们 | 同类（cass / sessionwiki / agent-sessions） |
 |---|---|---|
-| 接口 | **2 个工具 / 9 个参数 / 324 token** | 20–30+ 个子命令 |
+| 接口 | **2 个工具 / 9 个参数 / 306 token** | 20–30+ 个子命令 |
 | 定位 | agent 调用 + 管道 | 人来浏览（TUI / Web UI / 原生 App） |
 | 依赖 | 零（`node:sqlite` + `node:zlib`） | Rust/Go/Swift 二进制 |
 | 语义搜索 | 不做（要模型） | cass 可选（默认模型 90MB） |
