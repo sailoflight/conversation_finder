@@ -1,5 +1,5 @@
 {
-  "name": "conversation-finder",
+  "name": "conversation_finder",
   "version": "0.1.0",
   "description": "The grep of agent session history — compaction-proof search over DSH / Claude Code / Codex / OpenCode logs. Zero dependencies, CLI + MCP.",
   "type": "module",
@@ -39,6 +39,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sailoflight/conversation-finder.git"
+    "url": "git+https://github.com/sailoflight/conversation_finder.git"
   }
 }
