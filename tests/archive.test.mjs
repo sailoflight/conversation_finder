@@ -9,6 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, cpSync, rmSync } from 'node:fs';
+import { buildFixture } from './fixtures/make-fixture.mjs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,11 +20,18 @@ import { renderShow, showNotes } from '../lib/format.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * 测试语料**必须现生成**，不能读 `tests/fixtures/sessions`：
+ * 那个目录是 .gitignore 的（会话文件入不了库），所以全新 clone 下来并不存在。
+ * 直接读会在本地通过、在 CI / 别人机器上挂 —— 这类问题最难查。
+ */
+const fixtureRoot = () => buildFixture();
+
 /** 建索引 → 找到一条命中 → 删掉原始会话目录。 */
 function indexThenPrune() {
   const home = mkdtempSync(join(tmpdir(), 'cfind-archive-'));
   const root = join(home, 'sessions');
-  cpSync(join(HERE, 'fixtures', 'sessions'), root, { recursive: true });
+  cpSync(fixtureRoot(), root, { recursive: true });
   const db = openDb(join(home, 'index.db'));
   syncIndex(db, { root, now: 1700000000000, only: ['dsh'] });
   const hit = search(db, { query: 'settlement_id', scope: { mode: 'all' }, limit: 1 }).hits[0];
@@ -65,7 +73,7 @@ test('原始文件存在时 archived=false（不能把正常情况也标成归�
   const home = mkdtempSync(join(tmpdir(), 'cfind-archive-live-'));
   try {
     const root = join(home, 'sessions');
-    cpSync(join(HERE, 'fixtures', 'sessions'), root, { recursive: true });
+    cpSync(fixtureRoot(), root, { recursive: true });
     const db = openDb(join(home, 'index.db'));
     syncIndex(db, { root, now: 1700000000000, only: ['dsh'] });
     const hit = search(db, { query: 'settlement_id', scope: { mode: 'all' }, limit: 1 }).hits[0];
@@ -119,7 +127,7 @@ test('sync 把消失的文件标记归档，而不是删掉内容', async () => 
   const home = mkdtempSync(join(tmpdir(), 'cfind-sync-arch-'));
   try {
     const root = join(home, 'sessions');
-    cpSync(join(HERE, 'fixtures', 'sessions'), root, { recursive: true });
+    cpSync(fixtureRoot(), root, { recursive: true });
     const db = openDb(join(home, 'index.db'));
     syncIndex(db, { root, now: 1700000000000, only: ['dsh'] });
     const docsBefore = db.prepare('SELECT COUNT(*) AS c FROM docs').get().c;
@@ -146,7 +154,7 @@ test('purgeArchived 只在显式调用时清理，且不碰未归档的内容', 
   const home = mkdtempSync(join(tmpdir(), 'cfind-purge-'));
   try {
     const root = join(home, 'sessions');
-    cpSync(join(HERE, 'fixtures', 'sessions'), root, { recursive: true });
+    cpSync(fixtureRoot(), root, { recursive: true });
     const db = openDb(join(home, 'index.db'));
     syncIndex(db, { root, now: 1700000000000, only: ['dsh'] });
     rmSync(join(root, '--tmp-fixture-demo--', 'aaaaaaaa-1111-4111-8111-111111111111'), {
