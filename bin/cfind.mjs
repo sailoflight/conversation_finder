@@ -63,7 +63,7 @@ const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude 
                       不指定就只看到开头）
   --before/--after <n>  show: 目标前后各取几条（默认 3）
   --full              show: 不截断
-  --min-severity <s>  audit: high|medium|low|all（默认 high；熵启发式误报高，需显式 all）
+  --deep              audit: 连熵启发式一起扫（能抓无固定前缀的凭据，但 sha256/随机 id 会误报）
   --fail-on-findings  audit: 有命中则退出码 1（CI 门禁）
   --no-index          不读写磁盘索引，用内存索引现建现查
   --terse             已无作用（默认就是精简格式），保留仅为兼容旧脚本
@@ -75,8 +75,8 @@ stdout 只放结果；命中总数、模糊放宽、去重折叠这些"工具自
 退出码: 0 命中 / 1 无命中 / 2 用法错误 / 3 语料不可读
 `;
 
-const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'verbose', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall', 'visible', 'list', 'regex']);
-const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'context', 'before', 'after', 'pattern', 'min-severity', 'source', 'find', 'exclude']);
+const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'verbose', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall', 'visible', 'list', 'regex', 'deep']);
+const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'context', 'before', 'after', 'pattern', 'source', 'find', 'exclude']);
 
 /** 解析 argv → { positional, flags }。未知选项直接报错，避免静默忽略。 */
 export function parseArgs(argv) {
@@ -247,7 +247,7 @@ export function main(argv = process.argv.slice(2)) {
         scope: scopeFinal,
         limit: num(flags.limit, 50),
         includeReasoning: flags['no-reasoning'] !== true,
-        minSeverity: flags['min-severity'] ?? 'high',
+        deep: flags.deep === true,
       });
       process.stdout.write(renderAudit(result, { json, scope: describeScope(scopeFinal) }));
       if (flags['fail-on-findings'] === true && result.findings.length > 0) return 1;

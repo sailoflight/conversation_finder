@@ -108,7 +108,7 @@ type Scope =
 | 新概念（计入，≤2） | 为什么 grep 没有 |
 |---|---|
 | `exclude` | grep 只能按**文件**过滤；会话语料还有「工具输出/思考/答复」这一层，实测占 85% 命中 |
-| `minSeverity` | grep 没有严重度分级 |
+| `deep` | grep 没有"再扫一遍低精度启发式"这回事 |
 
 `tests/mcp.test.mjs` 会机械校验：
 - 出现未归类的参数 → 失败（逼你在 `lib/interface.mjs` 表态）；
@@ -322,7 +322,7 @@ outline(db, { scope, promptLimit = 60, responseLimit = 120 }): {
 // lib/audit.mjs
 DEFAULT_PATTERNS: Array<{ id: string, label: string, re: RegExp }>
 redact(secret: string): string        // 前 4 + '…' + 后 2 + `(len=N)`；长度 <7 时全遮
-audit(db, { patterns = DEFAULT_PATTERNS, scope, limit = 50, includeReasoning = true }): {
+audit(db, { patterns = DEFAULT_PATTERNS, scope, limit = 50, includeReasoning = true, deep = false }): {
   scanned: { sessions: number, docs: number },
   findings: Array<{ patternId, label, sessionId, short, seq, kind, time, redacted, length }>
 }
@@ -333,6 +333,11 @@ audit(db, { patterns = DEFAULT_PATTERNS, scope, limit = 50, includeReasoning = t
 - 模式集至少覆盖：`sk-` 类 key、`AKIA`、`ghp_`、`AIza`、`xoxb-`、PEM 私钥块、`Bearer <token>`、
   `password|passwd|pwd|api_key|secret|token` 赋值、URL 内嵌凭据、以及 `~/.dsh/.credentials.yaml` 里的高熵串形态。
 - 同一 `(sessionId, seq, kind, patternId)` 去重。
+- **不分"严重度"**：这个分级名不副实 —— 一个 sha256 摘要和一把 AKIA 密钥的危险程度
+  天差地别，但它们只是「同一条熵模式的两类结果」。真正的区别是**模式精度**：
+  `LOW_PRECISION`（`high-entropy` / `high-entropy-hex`）默认不扫，`deep: true` 才加入。
+  实测默认 96 条、`deep` 396 条（多 3.1 倍），多出来的主要是长度 64/32 的哈希。
+  所以参数叫 `deep`（行为），不叫 `minSeverity`（名不副实的机制）。
 
 ```js
 // lib/format.mjs

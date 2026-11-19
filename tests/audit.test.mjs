@@ -166,9 +166,20 @@ test('DEFAULT_PATTERNS：契约要求的模式全部覆盖且命中', () => {
   for (const p of DEFAULT_PATTERNS) assert.ok(!p.re.flags.includes('g'), `${p.id} 不应带 g`);
   for (const p of DEFAULT_PATTERNS) assert.ok(typeof p.label === 'string' && p.label.length > 0);
 
-  const { findings } = audit(db, { scope: { mode: 'session', id: SECRETS_ID } });
-  const hit = new Set(findings.map((f) => f.patternId));
-  for (const id of ids) assert.ok(hit.has(id), `模式 ${id} 在假凭据语料上未命中`);
+  // 默认只扫高精度模式；熵启发式要 deep:true 才会参与（默认不扫，见 audit.mjs）。
+  // 所以覆盖性必须分两次断言 —— 否则要么漏检启发式，要么默认就带着 3 倍噪音。
+  const base = new Set(
+    audit(db, { scope: { mode: 'session', id: SECRETS_ID } }).findings.map((f) => f.patternId),
+  );
+  const deepHit = new Set(
+    audit(db, { scope: { mode: 'session', id: SECRETS_ID }, deep: true }).findings.map((f) => f.patternId),
+  );
+  // 启发式模式默认不该出现
+  for (const id of ['high-entropy', 'high-entropy-hex']) {
+    assert.ok(!base.has(id), `启发式 ${id} 不该在默认结果里出现（噪音）`);
+    assert.ok(deepHit.has(id), `deep:true 时 ${id} 必须命中`);
+  }
+  for (const id of ids) assert.ok(deepHit.has(id), `模式 ${id} 在假凭据语料上未命中`);
 });
 
 // ---------- 不泄露 ----------

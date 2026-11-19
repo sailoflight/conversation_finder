@@ -75,7 +75,7 @@ agent 早就"会" grep。所以参数不该是新的抽象，而该是它已有�
 | 新概念 | 为什么 grep 没有 |
 |---|---|
 | `exclude` | grep 只能按**文件**过滤；会话语料还有「工具输出 / 思考 / 答复」这一层，实测占 85% 命中 |
-| `minSeverity` | grep 没有严重度分级 |
+| `deep` | grep 没有"再扫一遍低精度启发式"这回事 |
 
 预算据此定义：**工具 ≤ 2、新概念 ≤ 2、接口税 ≤ 500 tok**。
 新增参数时必须在 `lib/interface.mjs` 里声明它属于哪一类，否则测试直接失败 ——
@@ -323,16 +323,43 @@ L2 **永远不给全文**：agent 需要细节必须显式再调一次 `show`。
 ## 隐私 / 涉密检查
 
 ```bash
-cfind audit                        # 默认只看高精度模式（key 前缀、PEM、Bearer、xxx= 赋值…）
-cfind audit --min-severity all      # 加熵启发式（误报高：路径、sha256 摘要都会命中）
-cfind audit --fail-on-findings      # CI 门禁：有命中则退出码 1
+cfind audit                      # 只扫当前会话
+cfind audit --all --exclude-self # 扫全部，但跳过自己（检查"别人的会话有没有泄密"）
+cfind audit --deep               # 连熵启发式一起扫
 ```
 
-输出**强制脱敏**，审计器自身不会变成泄露源：
+**默认扫 9 个高精度模式**，都靠固定前缀或明确语义，几乎不会误报：
 
-```
-[secret-assignment] 178bf480 #630 tool-result :: hsiX…Wc(len=43)
-```
+| 模式 | 例子 |
+|---|---|
+| `sk-key` | `sk-...`（OpenAI/Anthropic） |
+| `aws-access-key` | `AKIA...` |
+| `github-token` | `ghp_...` |
+| `google-api-key` | `AIza...` |
+| `slack-token` | `xoxb-...` |
+| `pem-private-key` | `-----BEGIN ... PRIVATE KEY-----` |
+| `bearer-token` | `Authorization: Bearer ...` |
+| `secret-assignment` | `password = "..."`、`api_key: "..."` |
+| `url-credentials` | `https://user:pass@host` |
+
+`--deep` 再加两个**熵启发式**（不看上下文，只算随机度）。它确实能抓到没有固定前缀的凭据，
+但代价实测过：
+
+| | 条数 |
+|---|---|
+| 默认（9 个高精度模式） | **96** |
+| `--deep`（+2 个熵启发式） | **396**（多 3.1 倍） |
+
+多出来的 300 条里，长度 64 的 **66 条**、长度 32 的 **13 条** —— 那是 sha256 和 md5。
+所以这东西**不是"严重度"**：一个 sha256 摘要和一把 AKIA 密钥的危险程度天差地别，
+但它们在这套规则里只是「同一条熵模式的两类结果」。
+
+真正的区别是**模式精度**，不是危险程度。所以参数叫 `deep`（行为：再扫一遍），
+而不是 `minSeverity`（机制：一个名不副实的分级）。
+
+所有输出**强制脱敏**：前 4 字符 + `…` + 后 2 字符 + `(len=N)`，长度 < 7 全遮成 `***`。
+完整凭据只存在于 `lib/audit.mjs` 的局部变量里，绝不进返回值。
+
 
 ## 退出码
 

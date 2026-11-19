@@ -161,10 +161,9 @@ const TOOLS = [
       type: 'object',
       properties: {
         all: { type: 'boolean', description: '扫全部会话。默认只扫当前会话。' },
-        minSeverity: {
-          type: 'string',
-          description: 'high（默认）| low | all。low 含熵启发式，误报多。',
-          enum: ['high', 'low', 'all'],
+        deep: {
+          type: 'boolean',
+          description: '深扫：连"高熵字符串"启发式一起查，能抓到没有固定前缀的凭据，但会把 sha256/随机 id 也算进来（实测多出 3 倍噪音）。',
         },
       },
     },
@@ -224,7 +223,7 @@ function callTool(name, args) {
         patterns: DEFAULT_PATTERNS,
         scope,
         limit: 50,
-        minSeverity: typeof args.minSeverity === 'string' ? args.minSeverity : 'high',
+        deep: args.deep === true,
       });
       return text(renderAudit(result, { json: false, scope: describeScope(scope) }));
     }
