@@ -33,6 +33,27 @@ $ cfind show 1b4094ad 186 --before 1 --after 1
 
 所以 `| grep ':'` 能只留命中行，`| cut -d: -f2` 能只拿行号。
 
+### 大事件：`--find` 定位到具体位置
+
+`seq` 只回答"哪个事件"，不回答"事件里的哪一处"。而一条事件可以有几万字符
+（reasoning 块、抓取的文档、巨型工具输出）—— 实测 13% 的文档超过 2000 字符：
+
+```
+$ cfind show 5b1626bf 86
+(#86 has 62836 more chars not shown (reasoning); add --find <term> to jump to the match)
+
+$ cfind show 5b1626bf 86 --find descending
+5b1626bf:86:…er seq8 '<compacted-summary>...幂等去重' yes … score descending. Also 'settlement_id' …
+```
+
+给 `--find`（通常就传你刚搜的那个词）后，窗口**以命中处为中心**，
+并且会显示普通视角省略的部分（如 reasoning 块）—— 保证 search 说命中的东西，
+`show` 一定看得到。
+
+> 这条不变量有测试锁死（`tests/show-find.test.mjs`）：`renderEvent` 是"人读视角"
+> （只给 text 块），`toDocs` 是"索引视角"（还含 reasoning）。两者一旦不一致，
+> 就会出现"search 说命中在 #86，show #86 里找不到那个词"这种最难解释的 bug。
+
 想要带 kind/surface/标题的富格式就 `--verbose`。
 
 两种形态，同一套内核：

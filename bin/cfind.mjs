@@ -14,7 +14,7 @@ import { syncIndex, stats } from '../lib/store.mjs';
 import { search, show, resolveSessionIds } from '../lib/query.mjs';
 import { outline } from '../lib/outline.mjs';
 import { audit, DEFAULT_PATTERNS } from '../lib/audit.mjs';
-import { renderHits, renderShow, renderOutline, renderAudit, renderStats, hitNotes } from '../lib/format.mjs';
+import { renderHits, renderShow, renderOutline, renderAudit, renderStats, hitNotes, showNotes } from '../lib/format.mjs';
 
 const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude Code / Codex / OpenCode）
 用法（grep 形状：输出 <session>:<seq>:<text>，一行一条，可直接管道）:
@@ -49,6 +49,8 @@ const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude 
   --no-reasoning      排除 reasoning 文档（默认包含，权重最低）
   --no-fuzzy          关闭模糊级联（前缀/纠错/CJK 容错/放宽），只做精确匹配
   --no-dedupe         关闭近似重复折叠（默认开启）
+  --find <term>       show: 以该词为中心显示（大事件里命中可能在几万字符处，
+                      不指定就只看到开头）
   --before/--after <n>  show: 目标前后各取几条（默认 3）
   --full              show: 不截断
   --min-severity <s>  audit: high|medium|low|all（默认 high；熵启发式误报高，需显式 all）
@@ -64,7 +66,7 @@ stdout 只放结果；命中总数、模糊放宽、去重折叠这些"工具自
 `;
 
 const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'verbose', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall']);
-const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'before', 'after', 'pattern', 'min-severity', 'source']);
+const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'before', 'after', 'pattern', 'min-severity', 'source', 'find']);
 
 /** 解析 argv → { positional, flags }。未知选项直接报错，避免静默忽略。 */
 export function parseArgs(argv) {
@@ -241,14 +243,27 @@ export function main(argv = process.argv.slice(2)) {
       const [sessionArg, seqArg] = rest;
       if (!sessionArg || seqArg === undefined) throw new UsageError('用法: cfind show <session> <seq>');
       const sessionId = resolveSessionArg(db, sessionArg);
+      const find = typeof flags.find === 'string' ? flags.find : undefined;
       const shown = show(db, {
         sessionId,
         seq: Number(seqArg),
         before: num(flags.before, 3),
         after: num(flags.after, 3),
+        find,
       });
       // show 的会话来自位置参数，与 resolveScope 得到的 scope 无关：交给 renderShow 按 sessionId 反推。
-      process.stdout.write(renderShow(shown, { json, maxChars: flags.full ? 0 : maxChars, verbose: flags.verbose === true }) + '\n');
+      process.stdout.write(
+        renderShow(shown, {
+          json,
+          maxChars: flags.full ? 0 : maxChars,
+          verbose: flags.verbose === true,
+          find,
+        }) + '\n',
+      );
+      if (!json) {
+        const notes = showNotes(shown, { find });
+        if (notes.length > 0) process.stderr.write(`(${notes.join(' · ')})\n`);
+      }
       return 0;
     }
 

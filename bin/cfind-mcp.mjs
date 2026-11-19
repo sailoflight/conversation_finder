@@ -29,7 +29,7 @@ import { syncIndex } from '../lib/store.mjs';
 import { search, show } from '../lib/query.mjs';
 import { outline } from '../lib/outline.mjs';
 import { audit, DEFAULT_PATTERNS } from '../lib/audit.mjs';
-import { renderHits, renderShow, renderOutline, renderAudit } from '../lib/format.mjs';
+import { renderHits, renderShow, renderOutline, renderAudit, showNotes } from '../lib/format.mjs';
 import { readSessionFile } from '../lib/decode.mjs';
 
 const NAME = 'cfind';
@@ -164,6 +164,13 @@ const TOOLS = [
         seq: { type: 'number', description: '事件序号，来自 search 结果里的 #seq。' },
         before: { type: 'number', description: '目标之前取几条，默认 3。' },
         after: { type: 'number', description: '目标之后取几条，默认 3。' },
+        find: {
+          type: 'string',
+          description:
+            '把显示窗口**居中到这个词**（通常就传你刚搜的那个词）。' +
+            '一条事件可能有几万字符，命中在其中第 6 万字符处；不给 find 就只看得到开头。' +
+            '也会显示被普通渲染省略的部分（如 reasoning 块）。',
+        },
       },
       required: ['session', 'seq'],
     },
@@ -250,13 +257,17 @@ function callTool(name, args) {
     }
     case 'show': {
       const sessionId = resolveSessionArg(target, args.session);
+      const find = typeof args.find === 'string' && args.find.trim() ? args.find.trim() : undefined;
       const shown = show(target, {
         sessionId,
         seq: Number(args.seq),
         before: Number.isFinite(Number(args.before)) ? Number(args.before) : 3,
         after: Number.isFinite(Number(args.after)) ? Number(args.after) : 3,
+        find,
       });
-      return text(renderShow(shown, { json: false, maxChars: 4000 }));
+      const body = renderShow(shown, { json: false, maxChars: 4000, find });
+      const notes = showNotes(shown, { find });
+      return text(notes.length > 0 ? `${body}\n(${notes.join(' · ')})` : body);
     }
     case 'outline': {
       const scope = scopeOf(args, target);

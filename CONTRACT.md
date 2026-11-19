@@ -84,6 +84,19 @@ type Scope =
 - 富格式（kind/surface/标题/截断后缀）只在 `verbose: true` 时出现。
 - 输出必须以换行结尾（否则 `| wc -l` 少数一行）。
 
+### show 的 L2/L3 一致性（硬规则）
+
+**`show` 的正文必须包含检索命中的那段内容。**
+
+`renderEvent()` 是「人读视角」：只给 `text` 块；`toDocs()` 是「索引视角」：还含 reasoning 等。
+两者不一致时会出现最尴尬的 bug：search 说命中在 `#86`，`show #86` 里却完全找不到那个词。
+
+因此：
+- 传了 `find` 时，若渲染正文里没有它，必须退回 `toDocs()` 的正文（那正是被索引的字节）；
+- 一条事件可能有几万字符，`find` 还要把窗口**居中到命中处**，而不是从第 0 字符开始截；
+- 没传 `find` 且索引内容明显多于显示内容时，必须报告 `target.hidden` 并提示用 `find`。
+  静默丢掉内容会让用户误判"命中是错的"。
+
 ### surface 语义（`--recall` 的全部依据）
 
 | surface | 含义 | 对 agent 的价值 |
@@ -171,9 +184,9 @@ search(db, {
   }>
 }
 
-show(db, { sessionId, seq, before = 3, after = 3 }): {
+show(db, { sessionId, seq, before = 3, after = 3, find? }): {
   sessionId, short, title, cwd,
-  target: { seq, type, time, kind },
+  target: { seq, type, time, kind, hidden },  // hidden = 索引有、显示没给的字符数
   events: Array<{ seq, type, time, surface, role, text, isTarget }>
 }
 ```
