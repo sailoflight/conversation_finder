@@ -128,28 +128,32 @@ function resolveSessionArg(target, arg) {
 // type / properties / required / additionalProperties / items / enum / const / description。
 const TOOLS = [
   {
-    // description 是**唯一**能让 agent 知道"结果可不可信"的地方，所以它优先说保证，
-    // 而不是说功能。这条保证改变了 agent 的推理方式：命中即可作为证据。
+    // 「像 grep」是最省的描述方式：agent 已经内化 -r/-C/-l/-m/-E，
+    // 一句话就承载了这些参数的语义，不必自己叙述一遍。
+    // 唯一需要额外说明的是**与 grep 不同**的地方：默认严格字面、默认只搜本会话。
     name: 'search',
     description:
-      '搜 agent 会话历史，输出 `session:seq:text`。**每条命中都真的含你搜的词**（严格字面，不做近义替换）；压缩掉的历史也能搜，含你看不见的那部分。',
+      '像 grep：在 agent 会话历史里找内容。默认严格字面（命中必含你搜的词，不做近义替换）。' +
+      '输出 `session:seq:text`，一行一条。压缩掉的历史也能搜。',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '要搜的词或短语，中文英文皆可。' },
-        all: { type: 'boolean', description: '全部会话（grep -r）。默认只当前会话。' },
-        context: { type: 'number', description: '每条命中前后各取 N 条事件（grep -C）。' },
+        query: { type: 'string', description: 'pattern' },
+        all: { type: 'boolean', description: '-r：全部会话（默认仅本会话）' },
+        context: { type: 'number', description: '-C N：命中前后各取 N 条' },
+        list: { type: 'boolean', description: '-l：只列会话' },
+        limit: { type: 'number', description: '-m N：上限，默认 10' },
+        regex: { type: 'boolean', description: '-E：当正则' },
+        // 下面这个是 grep 没有的，必须解释
         exclude: {
           type: 'array',
           items: {
             type: 'string',
             enum: ['tool', 'reasoning', 'assistant', 'user', 'title', 'system', 'compaction'],
           },
-          description: '排除区域：tool=工具调用+输出（噪音最大）、reasoning=思考过程。',
+          description:
+            'grep 没有：按区域排除。tool=工具调用+输出（噪音最大）、reasoning=思考过程',
         },
-        regex: { type: 'boolean', description: '把 query 当正则（较慢，走全表扫描）。' },
-        limit: { type: 'number', description: '命中上限，默认 10。' },
-        list: { type: 'boolean', description: '只列会话，不返回正文（grep -l）。' },
       },
       required: ['query'],
     },
@@ -160,15 +164,17 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        all: { type: 'boolean', description: '扫全部会话。默认只扫当前会话。' },
+        all: { type: 'boolean', description: '-r：全部会话（默认仅本会话）' },
+        // grep 没有的：解释清楚代价
         deep: {
           type: 'boolean',
-          description: '连高熵启发式一起扫：能抓无固定前缀的凭据，但 sha256 与随机 id 会误报。',
+          description: 'grep 没有：连高熵启发式一起扫。能抓无前缀凭据，但 sha256/随机 id 会误报',
         },
       },
     },
   },
 ];
+
 
 
 const text = (value) => ({ content: [{ type: 'text', text: value }] });

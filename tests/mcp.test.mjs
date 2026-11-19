@@ -440,7 +440,12 @@ test('MCP: search 的描述必须声明「严格字面」保证', async () => {
     await client.request('initialize', initParams);
     const { result } = await client.request('tools/list', {});
     const search = result.tools.find((tool) => tool.name === 'search');
-    assert.match(search.description, /每条命中都真的含/, '描述里必须写明严格字面保证');
+    // 「像 grep」是最省的描述方式：agent 已内化 -r/-C/-l/-m/-E，
+    // 一句话就承载这些参数的语义，不必自己叙述一遍。
+    assert.match(search.description, /像 grep/, '应当用「像 grep」而不是自行叙述参数语义');
+    // 但严格字面这条**必须**明说：grep 不做近义替换，我们也一样，
+    // agent 需要知道「命中即可作为证据」。
+    assert.match(search.description, /严格字面|命中必含/, '描述里必须写明严格字面保证');
     // 不能反过来吹"模糊/智能"，那与默认行为矛盾
     assert.doesNotMatch(search.description, /模糊|纠错|近义词?搜索/, '默认不做模糊，描述不该暗示');
   } finally {
@@ -463,6 +468,34 @@ test('MCP: 描述里不该出现已移除/已过时的说法', async () => {
     for (const gone of ['surface', 'recall', 'synonym', 'fuzzy', 'find', 'session', 'project']) {
       assert.ok(!allProps.includes(gone), `${gone} 不该出现在 MCP 参数里`);
     }
+  } finally {
+    client.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+
+test('MCP: grep 同款的参数只写对应的 grep flag（不重复叙述）', async () => {
+  // 参数描述的作用是「告诉 agent 这是哪个 flag」，而不是再解释一遍它做什么。
+  // agent 对 `-C`、`-l`、`-m` 的语义比我们的措辞更熟。
+  const home = makeHome();
+  const client = connect(home);
+  try {
+    await client.request('initialize', initParams);
+    const { result } = await client.request('tools/list', {});
+    const props = result.tools.find((tool) => tool.name === 'search').inputSchema.properties;
+
+    for (const [param, flag] of [['query', 'pattern'], ['all', '-r'], ['context', '-C'], ['list', '-l'], ['limit', '-m'], ['regex', '-E']]) {
+      assert.ok(
+        props[param].description.includes(flag),
+        `${param} 的描述里应当出现 ${flag}，方便 agent 直接映射；实际：${props[param].description}`,
+      );
+    }
+
+    // grep 没有的那一个必须解释清楚，否则 agent 无从知道它存在
+    assert.match(props.exclude.description, /grep 没有/, 'exclude 是 grep 没有的维度，必须说明');
+    const auditTool = result.tools.find((tool) => tool.name === 'audit');
+    assert.match(auditTool.inputSchema.properties.deep.description, /grep 没有/, 'deep 同样需要说明');
   } finally {
     client.close();
     rmSync(home, { recursive: true, force: true });
