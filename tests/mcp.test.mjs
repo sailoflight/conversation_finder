@@ -13,6 +13,7 @@ import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { buildFixture, SESSION_IDS } from './fixtures/make-fixture.mjs';
+import { auditInterface, GREP_PARITY, NOVEL_BUDGET, TAX_BUDGET } from '../lib/interface.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SERVER = join(ROOT, 'bin', 'cfind-mcp.mjs');
@@ -324,30 +325,50 @@ test('MCP(真实 SDK): DSH 的 client 能完成版本协商并调用工具', { s
   }
 });
 
-test('MCP: 接口税不超标（工具数 / 参数量 / 描述长度都钉住）', async () => {
+test('MCP: 预算只管「新概念」，grep 同款参数不算限制', async () => {
   const home = makeHome();
   const client = connect(home);
   try {
     await client.request('initialize', initParams);
     const { result } = await client.request('tools/list', {});
-    const tools = result.tools;
+    const report = auditInterface(result.tools);
 
-    // 这三个数字是「尽量少的工具、尽量少的参数、尽量少的提示词」的量化形式。
-    // 想加东西就得先改这里的断言 —— 那是一次有意识的决定，不是顺手膨胀。
-    assert.ok(tools.length <= 2, `工具数应 <=2，实际 ${tools.length}`);
-    const params = tools.reduce((sum, tool) => sum + Object.keys(tool.inputSchema.properties ?? {}).length, 0);
-    assert.ok(params <= 9, `参数总数应 <=9，实际 ${params}`);
-
-    // 粗粒度 token 估算：CJK/1.5 + ASCII/4
-    const cjk = (text) => (String(text).match(/[\u4e00-\u9fff]/g) ?? []).length;
-    const approx = (text) => Math.round(cjk(text) / 1.5 + (String(text).length - cjk(text)) / 4);
-    const tax = tools.reduce(
-      (sum, tool) => sum + approx(tool.description ?? '') + approx(JSON.stringify(tool.inputSchema)),
-      0,
+    // 与 grep 同款的参数不产生认知负担：agent 早就知道 -r/-C/-l/-m/-E 是什么。
+    // 真正要克制的是「grep 里没有的东西」。
+    assert.ok(
+      report.unknown.length === 0,
+      `这些参数既没归到 grep 同款、也没归到新概念：${report.unknown.join(', ')}。` +
+        '加参数时必须在 lib/interface.mjs 里表态。',
     );
-    // 实测 324 tok（exclude 的 enum 数组换来「合法值一眼可见」，值 59 tok）。
-    // 给 1.5 倍余量以免因措辞微调就挂，但能挡住"再加个工具"。
-    assert.ok(tax <= 500, `接口税 ${tax} tok 超预算（<=500）`);
+    assert.ok(
+      report.novel.length <= NOVEL_BUDGET,
+      `新概念 ${report.novel.length} 个（${report.novel.join(', ')}）超过预算 ${NOVEL_BUDGET}。` +
+        '先想清楚它能不能变成 grep 的一个 flag。',
+    );
+    assert.deepEqual(report.missing, [], '登记了却没使用的参数应当从映射里删掉');
+
+    // 工具数仍然要管：每多一个工具就多一段必须被读的 schema。
+    assert.ok(result.tools.length <= 2, `工具数应 <=2，实际 ${result.tools.length}`);
+
+    // token 是实打实的成本，与"熟不熟"无关，所以另有预算。
+    assert.ok(report.tax <= TAX_BUDGET, `接口税 ${report.tax} tok 超预算（<=${TAX_BUDGET}）`);
+  } finally {
+    client.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('MCP: 每个 grep 同款参数都用得上（映射不是摆设）', async () => {
+  const home = makeHome();
+  const client = connect(home);
+  try {
+    await client.request('initialize', initParams);
+    const { result } = await client.request('tools/list', {});
+    const report = auditInterface(result.tools);
+    // 反向检查：GREP_PARITY 里登记的，tools 里必须真有 —— 否则映射文件会悄悄过期。
+    for (const name of Object.keys(GREP_PARITY)) {
+      assert.ok(report.params.includes(name), `GREP_PARITY 登记了 ${name}，但工具里没有`);
+    }
   } finally {
     client.close();
     rmSync(home, { recursive: true, force: true });
