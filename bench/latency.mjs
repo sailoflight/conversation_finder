@@ -1,14 +1,17 @@
 // 延迟：MCP 常驻进程 vs CLI 每次 spawn（agent 实际感受到的速度）
+import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
-const HF = '/home/d_demo1/code/conversation_finder';
+// 仓库根 = 本文件的上两级。硬编码绝对路径会让别人 clone 下来直接跑不了。
+const HF = fileURLToPath(new URL('..', import.meta.url));
 const MCP = join(HF, 'bin/cfind-mcp.mjs');
 const CLI = join(HF, 'bin/cfind.mjs');
 const ENV = { ...process.env, CFIND_HOME: '/tmp/cfind-all',
-  CLAUDE_HOME: '/home/d_demo1/conversations/claude',
-  CODEX_HOME: '/home/d_demo1/conversations/codex',
-  OPENCODE_DIR: '/home/d_demo1/conversations/opencode' };
+  // 其它来源的语料位置由环境变量给，脚本不假设任何人的目录布局。
+  ...(process.env.CLAUDE_HOME ? { CLAUDE_HOME: process.env.CLAUDE_HOME } : {}),
+  ...(process.env.CODEX_HOME ? { CODEX_HOME: process.env.CODEX_HOME } : {}),
+  ...(process.env.OPENCODE_DIR ? { OPENCODE_DIR: process.env.OPENCODE_DIR } : {}) };
 
 const pct = (arr, p) => { const s=[...arr].sort((a,b)=>a-b); return s[Math.min(s.length-1, Math.floor(s.length*p))]; };
 const stat = (arr) => `p50 ${pct(arr,0.5).toFixed(1)}ms  p95 ${pct(arr,0.95).toFixed(1)}ms  min ${Math.min(...arr).toFixed(1)}ms  max ${Math.max(...arr).toFixed(1)}ms`;

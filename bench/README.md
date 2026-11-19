@@ -4,9 +4,9 @@
 
 ```bash
 export CFIND_HOME=/tmp/cfind-all \
-       CLAUDE_HOME=/home/d_demo1/conversations/claude \
-       CODEX_HOME=/home/d_demo1/conversations/codex \
-       OPENCODE_DIR=/home/d_demo1/conversations/opencode
+       CLAUDE_HOME=~/.claude \
+       CODEX_HOME=~/.codex \
+       OPENCODE_DIR=~/.local/share/opencode
 
 node bin/cfind.mjs index
 ```

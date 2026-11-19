@@ -1,6 +1,6 @@
 // tests/claude.test.mjs — Claude Code 适配器
 //
-// 测试**只依赖合成 fixture**（mkdtempSync），绝不读 /home/d_demo1/conversations
+// 测试**只依赖合成 fixture**（mkdtempSync），绝不读真实语料目录
 // 那种私有样本：样本会被移走，而适配器的契约不该跟着漂。
 // 覆盖：header/title、行号 seq 稳定性、_truncated 跳过、坏行/空文件容错、
 // 各类块的文档映射、tool_result 数组递归、renderEvent 角色、compact_boundary 遮蔽。

@@ -10,7 +10,7 @@
 - 测试用 `node --test`。每个代理只跑**自己的**测试文件，不要跑全量。
 - **文件所有权**：只创建/修改"你的交付物"里列出的文件。别的文件一行都别动。
 - 代码风格：Kahn 式紧凑写法，注释用中文，关键判定要写清"为什么"。
-- 语料根：`$DSH_HOME/sessions`（本机 `/home/d_demo1/.dsh/sessions`）。测试请用 fixture，别依赖真实语料漂移。
+- 语料根：`$DSH_HOME/sessions`（默认 `~/.dsh/sessions`）。测试请用 fixture，别依赖真实语料漂移。
 
 ## 1. 地基模块（已由 lead 写好，直接 import，不要改）
 

@@ -1,5 +1,7 @@
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-const HF='/home/d_demo1/code/conversation_finder';
+// 仓库根 = 本文件的上两级。硬编码绝对路径会让别人 clone 下来直接跑不了。
+const HF = fileURLToPath(new URL('..', import.meta.url));
 const {openDb}=await import(join(HF,'lib/schema.mjs'));
 const {search,show}=await import(join(HF,'lib/query.mjs'));
 const {outline}=await import(join(HF,'lib/outline.mjs'));

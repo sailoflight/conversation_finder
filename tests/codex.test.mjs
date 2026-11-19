@@ -1,6 +1,6 @@
 // tests/codex.test.mjs — Codex 适配器契约测试
 //
-// 只用 mkdtempSync 造合成语料，绝不依赖 /home/d_demo1/conversations（真实语料会漂移）。
+// 只用 mkdtempSync 造合成语料，绝不依赖真实语料（会漂移）。
 // 覆盖：header、坏行/行号连续性、developer 不入索引、task_complete 最终答复、
 //       function_call/output、turn_context summary、噪声过滤、compacted shadow 判定、
 //       .jsonl.zst 归档态读取、合成标题。

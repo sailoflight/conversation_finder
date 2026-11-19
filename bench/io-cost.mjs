@@ -1,10 +1,13 @@
 // 测两件事：① 每层输出的真实 token 成本与信息密度 ② MCP 常驻 / CLI 的延迟
+import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { zstdDecompressSync } from 'node:zlib';
 
 const ALL = '/tmp/cfind-all/index.db';
-const HF = '/home/d_demo1/code/conversation_finder';
+// 仓库根 = 本文件的上两级。硬编码绝对路径会让别人 clone 下来直接跑不了。
+const HF = fileURLToPath(new URL('..', import.meta.url));
 
 // ── token 估算：CJK 约 1.5 字/token，ASCII 约 4 字/token（DeepSeek BPE 的常见近似）──
 const cjk = (s) => (String(s).match(/[\u4e00-\u9fff]/g) ?? []).length;
@@ -34,10 +37,10 @@ function decodeDsh(file) {
 }
 let corpusChars = 0, corpusEvents = 0;
 const walk = (d,o=[])=>{for(const e of readdirSync(d,{withFileTypes:true})){const p=join(d,e.name);e.isDirectory()?walk(p,o):p.endsWith('.zstd')&&o.push(p)}return o};
-for (const f of walk('/home/d_demo1/.dsh/sessions')) {
+for (const f of walk(process.env.DSH_HOME ? `${process.env.DSH_HOME}/sessions` : `${homedir()}/.dsh/sessions`)) {
   const t = decodeDsh(f); corpusChars += t.length; corpusEvents += t.split('\n').filter(Boolean).length;
 }
-for (const dir of ['/home/d_demo1/conversations/claude','/home/d_demo1/conversations/codex','/home/d_demo1/conversations/opencode']) {
+for (const dir of [process.env.CLAUDE_HOME, process.env.CODEX_HOME, process.env.OPENCODE_DIR].filter(Boolean)) {
   for (const f of readdirSync(dir)) { const t = readFileSync(join(dir,f),'utf8'); corpusChars += t.length; corpusEvents += t.split('\n').filter(Boolean).length; }
 }
 

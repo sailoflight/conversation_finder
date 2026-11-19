@@ -7,16 +7,15 @@
 cfind 幂等键                      # 默认搜"自己"，不用传会话 id
 cfind 幂等键 --all                # 搜全部会话（≈ grep -r）
 cfind 幂等键 --all | cut -d: -f1  # 哪些会话提到它（grep 式管道）
-cfind show 178bf480 2417          # 取某条命中的上下文（≈ -A/-B）
+cfind show aaaaaaaa 2             # 取某条命中的上下文（≈ -A/-B）
 ```
 
 输出就是 `session:seq:text`，一行一条，和 `file:line:content` 同构：
 
 ```
-$ cfind settlement_id --all --limit 3
-e8cef3de:2122:⏵ fts5vocab 可用（注意：`settlement_id` 被切成 …
-9feefbdc:79:…assert.deepEqual(suggestTerms(['set'], 'settlement_id'…
-e8cef3de:3065:…cfind settlement_id --all --limit 3 2>&1…
+$ cfind 幂等键 --all --limit 3
+aaaaaaaa:1:[幂等键]与重复扣款排查
+aaaaaaaa:2:POST 请求重复提交会导致重复扣款，需要[幂等键]。
 ```
 
 **stdout 只放结果**；命中总数、模糊放宽、去重折叠这些"工具自己的话术"走 stderr
@@ -25,10 +24,10 @@ e8cef3de:3065:…cfind settlement_id --all --limit 3 2>&1…
 `show` 沿用 grep 的 context 惯例 —— 命中行用 `:`、上下文行用 `-`：
 
 ```
-$ cfind show 1b4094ad 186 --before 1 --after 1
-1b4094ad-185-bash {"command":"f=$(find ~/.dsh/sessions …
-1b4094ad:186:bash {"command":"f=$(find ~/.dsh/sessions …
-1b4094ad-187-[job/registered]
+$ cfind show aaaaaaaa 2 --before 1 --after 1
+aaaaaaaa-1-幂等键与重复扣款排查
+aaaaaaaa:2:POST 请求重复提交会导致重复扣款，需要幂等键。
+aaaaaaaa-3-⏵ 查一下订单服务的写入路径 先看去重逻辑在哪。 bash {"command":"grep -rn dedupe src/order"}
 ```
 
 所以 `| grep ':'` 能只留命中行，`| cut -d: -f2` 能只拿行号。
@@ -39,11 +38,11 @@ $ cfind show 1b4094ad 186 --before 1 --after 1
 （reasoning 块、抓取的文档、巨型工具输出）—— 实测 13% 的文档超过 2000 字符：
 
 ```
-$ cfind show 5b1626bf 86
+$ cfind show <session> 86
 (#86 has 62836 more chars not shown (reasoning); add --find <term> to jump to the match)
 
-$ cfind show 5b1626bf 86 --find descending
-5b1626bf:86:…er seq8 '<compacted-summary>...幂等去重' yes … score descending. Also 'settlement_id' …
+$ cfind show <session> 86 --find 命中处
+<session>:86:…窗口以命中处为中心，而不是从第 0 字符截断…
 ```
 
 给 `--find`（通常就传你刚搜的那个词）后，窗口**以命中处为中心**，
@@ -180,7 +179,7 @@ cfind index --gc           # 显式回收；不自动执行
 `show` 在归档状态下会明确提示：
 
 ```
-bbbbbbbb:10:压缩后继续：需要修 settlement_id 为空的分支。
+aaaaaaaa:2:POST 请求重复提交会导致重复扣款，需要幂等键。
 (原始会话文件已被删除（工具清理旧会话）；以下内容从索引重建，是蒸馏副本)
 ```
 
@@ -200,8 +199,8 @@ agent 的 `/compact`（或自动压缩）只让模型**看不见**旧消息，**
 | `shadowed`（已压缩，模型不可见） | **1539** | **62%** |
 
 ```bash
-$ cfind 自举 --all --recall
-178bf480:8:来检查这一整套DSH的更新…一别读凭证 二别着急操作
+$ cfind 最初 --all --recall
+aaaaaaaa:1:先调研一个会话检索工具，要求能找回被压缩掉的历史
 ```
 
 压缩之后再问"我们最初要干什么"，模型答不出来，`cfind` 一秒取回。
@@ -278,9 +277,9 @@ MCP 服务端同样自动降级（打不开磁盘库就用 `:memory:`）。
 输出会明确标注：
 
 ```
-$ cfind reconclie --all --terse
-e8cef3de#2122 assistant … :: …[reconcile] the ledger…
-(spelling→reconclie→reconcile)
+$ cfind 幂等建 --all
+aaaaaaaa:1:[幂等键]与重复扣款排查
+(spelling→幂等建→幂等键)
 ```
 
 实测（`bench/fuzzy-eval.mjs`，228 个精确 0 命中的查询）：
@@ -303,8 +302,8 @@ e8cef3de#2122 assistant … :: …[reconcile] the ledger…
 所以**自己的会话默认就搜压缩前**，不需要任何参数：
 
 ```
-$ cfind 预研究
-e8cef3de:8:先预研究一项目 一个专门用于在DSH会话记录中快速找内容的项目   ← 最初的指令
+$ cfind 最初
+aaaaaaaa:1:先调研一个会话检索工具，要求能找回被压缩掉的历史   ← 最初的指令
 ```
 
 实测我这个会话：2,810 条事件里 **1,567 条已看不见**（56%）。

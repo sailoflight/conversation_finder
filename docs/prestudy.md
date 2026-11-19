@@ -52,7 +52,7 @@
 ```
 $DSH_HOME/sessions/
   --home-d_demo1-code-dsh-bench--/        ← projectKey(cwd)，可读的路径转义
-    178bf480-e2dc-412b-a68f-55b323fcceaa/
+    <session-uuid>/
       session.v4.jsonl.zstd               ← 唯一数据文件（zstd 多帧）
       session.lock                        ← 运行中会话的空锁文件
 ```
@@ -343,7 +343,7 @@ grep -n 'shadow' ~/.npm-global/lib/node_modules/@deepseek-ai/dsh/node_modules/@d
 
 ### 11.2 核心命题的量化证据
 
-同一会话（`178bf480`，2498 事件）压缩后：
+同一会话（约 2500 事件）压缩后：
 
 | surface | 事件数 | 占比 |
 |---|---|---|

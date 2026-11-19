@@ -1,7 +1,7 @@
 {
   "name": "conversation-finder",
   "version": "0.1.0",
-  "description": "Fast, compaction-proof search over agent session history — 摘要 > 选择 > 全文, zero dependencies",
+  "description": "The grep of agent session history — compaction-proof search over DSH / Claude Code / Codex / OpenCode logs. Zero dependencies, CLI + MCP.",
   "type": "module",
   "bin": {
     "cfind": "./bin/cfind.mjs",
@@ -10,7 +10,8 @@
   "files": [
     "bin",
     "lib",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "test": "node --test tests/*.test.mjs",
@@ -19,16 +20,25 @@
     "mcp": "node bin/cfind-mcp.mjs"
   },
   "keywords": [
-    "dsh",
-    "deepseek-harness",
-    "session",
+    "grep",
+    "session-history",
+    "agent",
     "search",
     "sqlite",
     "fts5",
-    "compaction"
+    "compaction",
+    "mcp",
+    "claude-code",
+    "codex",
+    "opencode",
+    "dsh"
   ],
   "engines": {
     "node": ">=22.19.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sailoflight/conversation-finder.git"
+  }
 }
