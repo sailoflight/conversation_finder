@@ -88,7 +88,7 @@ test('罕见说法能救回规范词的文档（召回增益 6/6）', () => {
     const exact = search(db, { query, scope: SCOPE, limit: 50, fuzzy: false, synonym: false });
     assert.equal(exact.total, 0, `前置条件不成立：「${query}」在语料里本来就存在`);
 
-    const wide = search(db, { query, scope: SCOPE, limit: 50 });
+    const wide = search(db, { query, scope: SCOPE, limit: 50, synonym: true });
     assert.ok(wide.total > 0, `「${query}」应当被扩展后救回`);
     assert.equal(wide.fuzzy?.what, 'synonym', `「${query}」应当是同义扩展救的，实际 ${wide.fuzzy?.what}`);
 
@@ -121,7 +121,7 @@ test('扩展词不得比原词更常见（频率护栏）', () => {
 test('精确命中存在时**不扩展**（不污染本来有答案的查询）', () => {
   const { db } = makeCorpus();
   // 「超时」在语料里本来就有 3 篇
-  const result = search(db, { query: '超时', scope: SCOPE, limit: 50 });
+  const result = search(db, { query: '超时', scope: SCOPE, limit: 50, synonym: true });
   assert.equal(result.fuzzy, undefined, '本来就能搜到，不该再扩展');
   assert.equal(result.total, 3);
 });
@@ -146,7 +146,7 @@ test('--no-synonym / synonym:false 可只关同义扩展', () => {
 
 test('同义扩展的报告能说清"用了哪个词、救回几条"', () => {
   const { db } = makeCorpus();
-  const result = search(db, { query: '等待太久', scope: SCOPE, limit: 50 });
+  const result = search(db, { query: '等待太久', scope: SCOPE, limit: 50, synonym: true });
   assert.match(result.fuzzy.applied, /超时\(\d+\)/, '报告里要带同义词与实际命中数');
 });
 
@@ -156,4 +156,20 @@ test('空语料不崩、也不乱扩展', () => {
   assert.deepEqual(expansions, []);
   const result = search(db, { query: '超时', scope: { mode: 'all' }, limit: 5 });
   assert.equal(result.total, 0);
+});
+
+
+test('**默认关闭**同义扩展（grep 语义优先）', () => {
+  // 这是本轮最重要的不变量。
+  // 同义扩展返回的文本里根本没有用户输入的那些词 —— 一个把 cfind 当 grep 用的
+  // agent 会据此误判"这份记录提到了 X"。默认必须是字面语义。
+  const { db } = makeCorpus();
+  const byDefault = search(db, { query: '等待太久', scope: SCOPE, limit: 50 });
+  assert.equal(byDefault.total, 0, '默认不该做同义替换：`等待太久` 在语料里不存在，就该返回 0');
+  assert.notEqual(byDefault.fuzzy?.what, 'synonym');
+
+  // 显式要了才给
+  const optedIn = search(db, { query: '等待太久', scope: SCOPE, limit: 50, synonym: true });
+  assert.ok(optedIn.total > 0);
+  assert.equal(optedIn.fuzzy?.what, 'synonym');
 });

@@ -58,8 +58,9 @@ const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude 
   --exclude-self      排除当前正在写入的会话（即你自己）
   --source <list>     只扫这些来源，逗号分隔（dsh,claude,codex,opencode）
   --no-reasoning      排除 reasoning 文档（默认包含，权重最低）
-  --no-fuzzy          关闭模糊级联（前缀/纠错/同义词/CJK 容错/放宽），只做精确匹配
-  --no-synonym        只关同义扩展（换说法也能搜到），其余模糊级联保留
+  --fuzzy             放宽召回：前缀 + 拼写纠错 + CJK 容错 + 省略一个 + 同义替换。
+                      默认**关闭**，默认行为是严格的字面匹配（每条命中都含你输入的词）。
+                      打开后结果可能与输入不逐字相同，stderr 会报告每一步放宽。
   --no-dedupe         关闭近似重复折叠（默认开启）
   --find <term>       show: 以该词为中心显示（大事件里命中可能在几万字符处，
                       不指定就只看到开头）
@@ -79,7 +80,7 @@ stdout 只放结果；命中总数、模糊放宽、去重折叠这些"工具自
 退出码: 0 命中 / 1 无命中 / 2 用法错误 / 3 语料不可读
 `;
 
-const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'verbose', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall', 'visible', 'list', 'regex', 'deep', 'gc', 'no-synonym']);
+const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'verbose', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall', 'visible', 'list', 'regex', 'deep', 'gc', 'fuzzy']);
 const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'context', 'before', 'after', 'pattern', 'source', 'find', 'exclude']);
 
 /** 解析 argv → { positional, flags }。未知选项直接报错，避免静默忽略。 */
@@ -338,8 +339,8 @@ export function main(argv = process.argv.slice(2)) {
       query,
       scope: scopeFinal,
       dedupe: flags['no-dedupe'] !== true,
-      fuzzy: flags['no-fuzzy'] !== true,
-      synonym: flags['no-synonym'] !== true,
+      fuzzy: flags.fuzzy === true,
+      synonym: flags.fuzzy === true,
       limit: num(flags.limit, 10),
       includeReasoning: flags['no-reasoning'] !== true,
       surface,

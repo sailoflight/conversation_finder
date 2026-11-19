@@ -42,7 +42,7 @@ test('精确命中时不触发模糊级联', () => {
 
 test('拼错一个字母仍能搜到（纠错路径）', () => {
   const db = makeDb(['we must reconcile the ledger carefully', 'another document']);
-  const broken = search(db, { query: 'reconclie', scope, limit: 5 }, );
+  const broken = search(db, { query: 'reconclie', scope, limit: 5, fuzzy: true });
   const exactOnly = search(db, { query: 'reconclie', scope, limit: 5, fuzzy: false });
   assert.equal(exactOnly.total, 0, '精确匹配本来搜不到');
   assert.ok(broken.total > 0, '纠错后应当搜到');
@@ -52,7 +52,7 @@ test('拼错一个字母仍能搜到（纠错路径）', () => {
 
 test('只记得词头也能搜到（前缀路径）', () => {
   const db = makeDb(['the settlement process runs nightly', 'another document']);
-  const result = search(db, { query: 'settle', scope, limit: 5 });
+  const result = search(db, { query: 'settle', scope, limit: 5, fuzzy: true });
   assert.equal(search(db, { query: 'settle', scope, limit: 5, fuzzy: false }).total, 0);
   assert.ok(result.total > 0);
   assert.equal(result.fuzzy?.what, 'prefix');
@@ -100,7 +100,7 @@ test('默认输出就是 grep 形状，逐行可定位', () => {
 
 test('「结果被放宽过」通过 hitNotes 汇报，而不是塞进结果行', () => {
   const db = makeDb(['we must reconcile the ledger carefully']);
-  const result = search(db, { query: 'reconclie', scope, limit: 5 });
+  const result = search(db, { query: 'reconclie', scope, limit: 5, fuzzy: true });
   // 结果行保持纯净（grep 形状）
   const out = renderHits(result, { scope: 'all sessions', maxChars: 0 });
   assert.doesNotMatch(out, /spelling/);
@@ -120,8 +120,8 @@ test('中文尾字写错仍能召回（CJK 容错级）', () => {
   // 回归：早先的模糊级联全是拉丁逻辑 —— prefix 对 CJK 返回同构短语、
   // 拼写纠错只认拉丁、OR 放宽对单条 CJK 也返回短语，等于**对中文完全无效**。
   const db = makeDb(['最初指令：先预研究一个会话检索项目、还要支持涉密检查']);
-  const typo = search(db, { query: '预研旧', scope, limit: 5 });
-  assert.equal(search(db, { query: '预研旧', scope, limit: 5, fuzzy: false }).total, 0, '精确匹配本来搜不到');
+  const typo = search(db, { query: '预研旧', scope, limit: 5, fuzzy: true });
+  assert.equal(search(db, { query: '预研旧', scope, limit: 5 }).total, 0, '精确匹配本来搜不到（默认不再放宽）');
   assert.ok(typo.total > 0, '尾字写错应被 CJK 容错救回');
   assert.equal(typo.fuzzy?.what, 'cjk-loose');
 });
@@ -130,7 +130,7 @@ test('中文容错不会把长查询放宽（防止噪音）', () => {
   // 「会话冗余项目」是 5 个 bigram：共享一个 bigram 不构成证据，必须整体命中。
   // 若这里放宽成 OR，任何含「会话」的文档都会命中 —— 那就等于放弃精确性。
   const db = makeDb(['关于会话检索项目的讨论', '另一个只提到会话的文档']);
-  const long = search(db, { query: '会话冗余项目', scope, limit: 5 });
+  const long = search(db, { query: '会话冗余项目', scope, limit: 5, fuzzy: true });
   assert.notEqual(long.fuzzy?.what, 'cjk-loose', '长查询不该走 CJK 容错');
   assert.equal(long.total, 0, '长查询救不回来时应当诚实返回 0');
 
@@ -150,7 +150,47 @@ test('CJK 容错与 surface=shadowed 组合可用（召回场景）', () => {
   insert.run('最初指令：先预研究一个项目', bigrams('最初指令：先预研究一个项目'), 'dsh', 'sess-cjk-0001', 1, 'user', 1700000000000, 'shadowed');
   insert.run('现在的进度是模糊搜索', bigrams('现在的进度是模糊搜索'), 'dsh', 'sess-cjk-0001', 2, 'user', 1700000001000, 'current');
 
-  const recalled = search(db, { query: '预研旧', scope: { mode: 'session', id: 'sess-cjk-0001' }, limit: 5, surface: 'shadowed' });
+  const recalled = search(db, { query: '预研旧', scope: { mode: 'session', id: 'sess-cjk-0001' }, limit: 5, surface: 'shadowed', fuzzy: true });
   assert.ok(recalled.total > 0);
   assert.ok(recalled.hits.every((hit) => hit.surface === 'shadowed'));
+});
+
+test('不变量：默认模式下每条命中都真的含有查询词（grep 语义）', () => {
+  // 这是「agent 把它当 grep 用」的唯一保障。
+  // 只要这条成立，默认行为的结论就可以被信任：
+  // 「cfind X 有命中」⇒「这段记录确实提到过 X」。
+  //
+  // 反过来，一旦默认放宽（前缀/纠错/同义），这个蕴含就不成立 ——
+  // agent 会据此得出错误结论，而它没有能力分辨"真命中"与"近似命中"。
+  const db = makeDb([
+    'the settlement process runs nightly',
+    '缓存加速是关键优化手段',
+    'we must reconcile the ledger carefully',
+    '另一个只提到缓存的文档',
+  ]);
+
+  // 这些查询在默认模式下都可能被"放宽"救回，必须全部落空
+  for (const query of ['settle', 'reconclie', '缓存加速呢', 'zzqqxxjwplm']) {
+    const result = search(db, { query, scope, limit: 10 });
+    // 要么 0 条；要么每条都必须真的含查询词
+    for (const hit of result.hits) {
+      const text = String(hit.snippet ?? '').toLowerCase();
+      const needle = String(query).toLowerCase();
+      assert.ok(
+        text.includes(needle) || text.includes(needle.slice(0, 2)),
+        `默认模式返回了不含「${query}」的命中：${text}`,
+      );
+    }
+    assert.equal(result.fuzzy, undefined, `「${query}」默认不该被放宽，实际 ${result.fuzzy?.what}`);
+  }
+
+  // 精确查询当然要命中
+  assert.ok(search(db, { query: 'settlement', scope, limit: 5 }).total > 0);
+});
+
+test('完全无关的查询在默认模式下必须返回 0（不许无中生有）', () => {
+  const db = makeDb(['some ordinary content about ledgers', '缓存加速是关键优化手段']);
+  for (const query of ['zzqqxxjwplm', '紫色的大象在跳舞', '完全不存在zzzqq']) {
+    assert.equal(search(db, { query, scope, limit: 10 }).total, 0, `「${query}」不该有命中`);
+  }
 });

@@ -91,7 +91,7 @@ test('surface=current 与 shadowed 互补，加起来等于 all', () => {
 test('召回也走模糊级联（记错词也能想起来）', () => {
   const db = makeDb();
   // 「预研旧」是错字，但应通过纠错/前缀召回 #1
-  const recalled = search(db, { query: '预研旧', scope, limit: 10, surface: 'shadowed' });
+  const recalled = search(db, { query: '预研旧', scope, limit: 10, surface: 'shadowed', fuzzy: true });
   assert.ok(recalled.total > 0, '召回路径不能绕过模糊匹配');
   assert.ok(recalled.hits.every((hit) => hit.surface === 'shadowed'));
 });
