@@ -154,6 +154,30 @@ token 是实打实的成本，与"熟不熟"无关，所以另有预算，不因
 `fuzzy` / `synonym` 默认 `false`；打开后走原有的 FTS bigram 级联（`--fuzzy`）。
 放宽的每一步必须经 `hitNotes()` 报到 stderr，不许混进 stdout 的结果行。
 
+### 索引必须有寿命（硬规则）
+
+索引会单向增长，四类来源都必须有对应机制，缺一个就会无限堆积：
+
+| 来源 | 机制 | 默认行为 |
+|---|---|---|
+| 新会话 | 无需处理 | — |
+| 归档内容 | `files.archived_at` 时间戳 + `purgeArchived({maxAge})` | 保留，`--gc --max-age` 回收 |
+| FTS5 墓碑段 | `optimizeIndex()` | `index` 到期自动（时间触发） |
+| 空闲页 | `vacuumIndex()` | 只由 `--gc` 触发，绝不自动 |
+
+两条不可违反的约束：
+
+1. **查询路径不做维护。** 只读 `PRAGMA freelist_count` 判断是否该提示，
+   提示走 stderr，不阻塞、不改变输出。让一条 grep 等 optimize 是错的设计。
+2. **`optimize` 与 `VACUUM` 的触发条件必须分开。**
+   optimize 会把死段转为空闲页，使 freelist 占比**上升**；
+   若用 freelist 触发 optimize 就是自我触发的死循环（实测每次白跑 643ms）。
+   - optimize ← 时间（从未整理 / 超 7 天）
+   - VACUUM ← freelist 占比 ≥8% **且** ≥8MB（绝对下限防小库天天报警）
+
+归档**不自动删除**：工具删掉的旧会话恰恰是"想不起某件事"时要找的东西。
+但 `archived_at` 让"多久了"可回答，`--max-age` 让寿命可设上限。
+
 ### 引擎可换，语义不可换（硬规则）
 
 `lib/engine.mjs` 可以在三条通路间选择（trigram 索引 / CJK bigram 索引 / 全表扫），

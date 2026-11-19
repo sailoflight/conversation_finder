@@ -141,3 +141,67 @@ test('CLI: cfind --help 退出码 0', () => {
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+// ── 索引寿命：维护命令必须可观察、可回收 ────────────────────────────
+
+test('CLI: index --gc 报告回收了多少字节', () => {
+  const home = makeHome();
+  try {
+    // 先建索引（磁盘模式，不能用 CFIND_NO_INDEX）
+    const built = spawnSync(process.execPath, ['--no-warnings', BIN, 'index'], {
+      encoding: 'utf8',
+      env: { ...isolatedEnv(home), DSH_SESSION_ID: '' },
+    });
+    assert.equal(built.status, 0, built.stderr);
+
+    const result = spawnSync(process.execPath, ['--no-warnings', BIN, 'index', '--gc'], {
+      encoding: 'utf8',
+      env: { ...isolatedEnv(home), DSH_SESSION_ID: '' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    // 必须报告回收量：只说"完成"等于没说
+    assert.match(result.stdout, /purged:/);
+    assert.match(result.stdout, /VACUUM/);
+    assert.match(result.stdout, /回收 [\d.]+MB/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('CLI: index --gc --max-age 只回收够老的，并说明范围', () => {
+  const home = makeHome();
+  try {
+    spawnSync(process.execPath, ['--no-warnings', BIN, 'index'], {
+      encoding: 'utf8',
+      env: { ...isolatedEnv(home), DSH_SESSION_ID: '' },
+    });
+    const result = spawnSync(process.execPath, ['--no-warnings', BIN, 'index', '--gc', '--max-age', '30'], {
+      encoding: 'utf8',
+      env: { ...isolatedEnv(home), DSH_SESSION_ID: '' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    // 收窄了范围就必须说出来，否则看输出的人会以为全清了
+    assert.match(result.stdout, /仅超过 30 天的/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('CLI: stats 在索引堆积时给出可操作的提示', () => {
+  const home = makeHome();
+  try {
+    spawnSync(process.execPath, ['--no-warnings', BIN, 'index'], {
+      encoding: 'utf8',
+      env: { ...isolatedEnv(home), DSH_SESSION_ID: '' },
+    });
+    const result = spawnSync(process.execPath, ['--no-warnings', BIN, 'stats'], {
+      encoding: 'utf8',
+      env: { ...isolatedEnv(home), DSH_SESSION_ID: '' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    // 小库不该报"可回收"（否则每次查询都念一句废话）
+    assert.doesNotMatch(result.stdout, /空闲页/, '小量空闲页不该提示回收');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

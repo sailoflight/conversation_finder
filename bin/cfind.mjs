@@ -12,6 +12,7 @@ import { existsSync } from 'node:fs';
 import { openDb } from '../lib/schema.mjs';
 import { indexPath, sessionsRoot, listSessionFiles, resolveScope, describeScope, shortId, selfSessionId, defaultSurface } from '../lib/paths.mjs';
 import { purgeArchived, syncIndex, stats } from '../lib/store.mjs';
+import { archivedAge, indexHealth, optimizeHint, optimizeIndex, vacuumIndex } from '../lib/lifecycle.mjs';
 import { search, show, resolveSessionIds, resolveExclude } from '../lib/query.mjs';
 import { outline } from '../lib/outline.mjs';
 import { audit, DEFAULT_PATTERNS } from '../lib/audit.mjs';
@@ -63,8 +64,9 @@ const HELP = `cfind — 在 agent 会话记录里快速找内容（DSH / Claude 
   --before/--after <n>  show: 目标前后各取几条（默认 3）
   --full              show: 不截断
   --deep              audit: 连熵启发式一起扫（能抓无固定前缀的凭据，但 sha256/随机 id 会误报）
-  --gc                index: 清掉已归档（原始文件已被工具删除）的内容。
+  --gc                index: 回收归档内容 + 整理 FTS 段 + VACUUM 真正缩小文件。
                       默认是归档不删除 —— 工具清理掉的旧会话往往正是你想找回的。
+  --max-age N         index --gc: 只回收「归档超过 N 天」的内容，给索引一个寿命上限。
   --fail-on-findings  audit: 有命中则退出码 1（CI 门禁）
   --no-index          不读写磁盘索引，用内存索引现建现查
   --terse             已无作用（默认就是精简格式），保留仅为兼容旧脚本
@@ -77,7 +79,7 @@ stdout 只放结果；命中总数、模糊放宽、去重折叠这些"工具自
 `;
 
 const BOOL_FLAGS = new Set(['json', 'all', 'no-reasoning', 'full', 'fail-on-findings', 'no-index', 'help', 'terse', 'verbose', 'no-dedupe', 'no-fuzzy', 'exclude-self', 'recall', 'visible', 'list', 'deep', 'gc', 'fuzzy']);
-const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'context', 'before', 'after', 'pattern', 'source', 'find', 'exclude']);
+const VALUE_FLAGS = new Set(['session', 'project', 'max-chars', 'limit', 'surface', 'context', 'before', 'after', 'pattern', 'source', 'find', 'exclude', 'max-age']);
 
 /** 解析 argv → { positional, flags }。未知选项直接报错，避免静默忽略。 */
 export function parseArgs(argv) {
@@ -206,6 +208,12 @@ export function main(argv = process.argv.slice(2)) {
   try {
     // 查询前顺手增量更新：磁盘模式只解新帧（毫秒级），内存模式=全量现建。
     const synced = sync(db, { root, only });
+    // 索引在堆积时**只提示、不维护**：用户敲一条 grep 不该等 optimize。
+    // index 命令自己会报告维护结果，不必再提示一次。
+    if (mode === 'disk' && !(isCommand && command === 'index')) {
+      const hint = optimizeHint(db);
+      if (hint !== null) process.stderr.write(`cfind: ${hint}\n`);
+    }
     const json = flags.json === true;
     const maxChars = num(flags['max-chars'], 1500);
     const terse = flags.terse === true;
@@ -241,16 +249,37 @@ export function main(argv = process.argv.slice(2)) {
     }
 
     if (isCommand && command === 'index') {
-      // --gc：清掉已归档（原始文件已消失）的内容。归档让索引只增不减，
-      // 所以需要一条显式的回收路径 —— 但绝不自动执行。
+      // ── 索引维护 ────────────────────────────────────────────────
+      //
+      // 索引会单向增长：归档内容 + FTS 墓碑 + 空闲页。两级维护代价差别很大，
+      // 所以分开：`index` 整理死段（快），`index --gc` 才真正缩小文件（慢）。
       if (flags.gc === true) {
-        const purged = purgeArchived(db);
+        // --max-age N：只清归档超过 N 天的内容 —— 给索引一个寿命上限，
+        // 而不是只有「全留」和「全清」两个极端。
+        const maxAge = num(flags['max-age'], undefined);
+        const purged = purgeArchived(db, { maxAge });
+        const compacted = optimizeIndex(db);
+        const vacuumed = vacuumIndex(db);
+        const reclaimed = Math.max(0, vacuumed.bytesBefore - vacuumed.bytesAfter);
+        const payload = { ...purged, ...compacted, ...vacuumed, reclaimed, maxAge: maxAge ?? null };
         process.stdout.write(
           json
-            ? JSON.stringify(purged)
-            : `purged: ${purged.sessions} archived sessions, ${purged.docs} docs, ${purged.events} events\n`,
+            ? JSON.stringify(payload)
+            : `purged: ${purged.sessions} archived sessions, ${purged.docs} docs, ${purged.events} events` +
+                `${maxAge === undefined ? '' : `（仅超过 ${maxAge} 天的）`}\n` +
+                `compacted: FTS 段整理 ${compacted.ms}ms · VACUUM ${vacuumed.ms}ms · ` +
+                `回收 ${(reclaimed / 1e6).toFixed(1)}MB（${(vacuumed.bytesBefore / 1e6).toFixed(1)}MB → ` +
+                `${(vacuumed.bytesAfter / 1e6).toFixed(1)}MB）\n`,
         );
         return 0;
+      }
+
+      // 普通 `index`：到期（空闲页过多 / 太久没整理）才 optimize。
+      // 这是维护命令，花几百毫秒整理是合理的；查询路径绝不这么做。
+      const health = indexHealth(db);
+      const compacted = health.optimizeDue ? optimizeIndex(db) : null;
+      if (compacted !== null && !json) {
+        process.stderr.write(`compacted: ${health.reason} → FTS 段整理 ${compacted.ms}ms\n`);
       }
       process.stdout.write(
         json
@@ -264,7 +293,24 @@ export function main(argv = process.argv.slice(2)) {
     }
 
     if (isCommand && command === 'stats') {
-      process.stdout.write(renderStats({ ...stats(db), mode }, { json }));
+      // 索引的「寿命」信息必须可观察：归档多久了、多少页能回收、上次整理什么时候。
+      // 只报能据以行动的（可回收量 / 到期），不报纯装饰的指标。
+      const health = indexHealth(db);
+      const aged = archivedAge(db);
+      process.stdout.write(
+        renderStats(
+          {
+            ...stats(db),
+            mode,
+            freeBytes: health.freeBytes,
+            vacuumDue: health.vacuumDue,
+            optimizeDue: health.optimizeDue,
+            optimizeReason: health.reason,
+            archivedOldestDays: aged.oldestDays,
+          },
+          { json },
+        ),
+      );
       return 0;
     }
 
