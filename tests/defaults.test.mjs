@@ -168,3 +168,15 @@ test('CLI: --exclude 写错时干净报错、退出码 2、不吐堆栈', () => 
   assert.ok(!result.stderr.includes('at resolveExclude'), '不该打印堆栈');
   assert.ok(!result.stderr.includes('node:internal'), '不该打印堆栈');
 });
+
+test('resolveExclude：逗号串、数组、重复 flag 三种写法等价', () => {
+  // CLI 的重复 flag 会被累加成数组 `['tool','reasoning']`，
+  // 而 `--exclude tool,reasoning` 会变成 `['tool,reasoning']` ——
+  // 后者如果不在数组项里再拆一次逗号，就会被当成一个叫 "tool,reasoning" 的区域名。
+  const expected = ['reasoning', 'tool-call', 'tool-result'];
+  assert.deepEqual(resolveExclude('tool,reasoning').sort(), expected);
+  assert.deepEqual(resolveExclude(['tool', 'reasoning']).sort(), expected);
+  assert.deepEqual(resolveExclude(['tool,reasoning']).sort(), expected, '数组项里的逗号串也要拆');
+  assert.deepEqual(resolveExclude(['tool, reasoning']).sort(), expected, '允许逗号后带空格');
+  assert.deepEqual(resolveExclude([' tool ', 'reasoning']).sort(), expected, '允许项首尾空格');
+});
